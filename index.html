@@ -189,7 +189,16 @@ padding:6px 12px;font-size:10px;color:#f00;animation:float-warn 4s ease-in-out i
     GPU TEMP CRITICAL ██ VRAM SATURATED ██ RENDER PIPELINE HIJACKED ██ 4×4 VIEWPORT GRID ACTIVE ██
   </div>
 </div>
+<audio id="bgm" src="audio.mp3" autoplay loop muted></audio>
 
+<script>
+const audio = document.getElementById("bgm");
+
+document.addEventListener("click", function () {
+    audio.muted = false;
+    audio.play();
+}, { once: true });
+</script>
 <!-- THREE.JS -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 

